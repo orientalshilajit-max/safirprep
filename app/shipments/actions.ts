@@ -39,7 +39,15 @@ function mapRow(row: any): Shipment {
     createdAt: new Date(row.created_at).toLocaleDateString("en-US", {
       month: "short", day: "numeric", year: "numeric",
     }),
-    products: (row.incoming_shipment_items ?? []).map((item: any) => ({
+    products: (row.incoming_shipment_items ?? []).map((item: {
+      id: string
+      product_id: string
+      expected_units: number
+      received_units: number
+      damaged_units: number
+      notes: string | null
+      products: { name: string; sku: string } | null
+    }) => ({
       id: item.id,
       productId: item.product_id,
       productName: item.products?.name ?? "",
@@ -49,7 +57,13 @@ function mapRow(row: any): Shipment {
       damagedUnits: item.damaged_units,
       notes: item.notes ?? "",
     })),
-    tracking: (row.shipment_trackings ?? []).map((t: any) => ({
+    tracking: (row.shipment_trackings ?? []).map((t: {
+      id: string
+      carrier: string
+      tracking_number: string | null
+      box_count: number
+      notes: string | null
+    }) => ({
       id: t.id,
       carrier: t.carrier,
       trackingNumber: t.tracking_number ?? "",
