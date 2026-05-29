@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { AlertCircle } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import type { Client, ClientStatus } from "@/lib/types"
 
@@ -18,28 +19,28 @@ export type ClientFormData = {
 type ClientModalProps = {
   isOpen: boolean
   onClose: () => void
-  onSave: (data: ClientFormData) => void
+  /** May return a Promise; modal shows loading state while it resolves. */
+  onSave: (data: ClientFormData) => void | Promise<void>
   client?: Client | null
 }
 
 const empty: ClientFormData = {
   companyName: "",
   contactName: "",
-  email: "",
-  phone: "",
-  notes: "",
-  status: "Active",
+  email:       "",
+  phone:       "",
+  notes:       "",
+  status:      "Active",
 }
 
 export function ClientModal({ isOpen, onClose, onSave, client }: ClientModalProps) {
-  // Track the last (isOpen, client) pair we initialised the form for.
-  // When either changes we reset during render — the React-approved
-  // alternative to calling setState inside a useEffect.
   const [prevKey, setPrevKey] = useState<string>("")
   const currentKey = `${isOpen}|${client?.id ?? "__new__"}`
 
-  const [form, setForm] = useState<ClientFormData>(empty)
-  const [errors, setErrors] = useState<Partial<Record<keyof ClientFormData, string>>>({})
+  const [form,      setForm]      = useState<ClientFormData>(empty)
+  const [errors,    setErrors]    = useState<Partial<Record<keyof ClientFormData, string>>>({})
+  const [saving,    setSaving]    = useState(false)
+  const [saveError, setSaveError] = useState("")
 
   if (prevKey !== currentKey) {
     setPrevKey(currentKey)
@@ -49,14 +50,16 @@ export function ClientModal({ isOpen, onClose, onSave, client }: ClientModalProp
           ? {
               companyName: client.companyName,
               contactName: client.contactName,
-              email: client.email,
-              phone: client.phone,
-              notes: client.notes,
-              status: client.status,
+              email:       client.email,
+              phone:       client.phone,
+              notes:       client.notes,
+              status:      client.status,
             }
           : empty
       )
       setErrors({})
+      setSaveError("")
+      setSaving(false)
     }
   }
 
@@ -69,15 +72,24 @@ export function ClientModal({ isOpen, onClose, onSave, client }: ClientModalProp
     const e: typeof errors = {}
     if (!form.companyName.trim()) e.companyName = "Required"
     if (!form.contactName.trim()) e.contactName = "Required"
-    if (!form.email.trim()) e.email = "Required"
+    if (!form.email.trim())       e.email       = "Required"
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = "Invalid email"
     if (Object.keys(e).length) { setErrors(e); return false }
     return true
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: { preventDefault(): void }) {
     e.preventDefault()
-    if (validate()) onSave(form)
+    if (!validate()) return
+    setSaveError("")
+    setSaving(true)
+    try {
+      await onSave(form)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save client.")
+    } finally {
+      setSaving(false)
+    }
   }
 
   const isEdit = !!client
@@ -93,16 +105,18 @@ export function ClientModal({ isOpen, onClose, onSave, client }: ClientModalProp
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-[13px] font-medium text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+            disabled={saving}
+            className="px-4 py-2 text-[13px] font-medium text-gray-600 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             type="submit"
             form="client-form"
-            className="px-4 py-2 bg-blue-600 text-white text-[13px] font-semibold rounded-lg hover:bg-blue-700 transition-colors"
+            disabled={saving}
+            className="px-4 py-2 bg-blue-600 text-white text-[13px] font-semibold rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-60"
           >
-            {isEdit ? "Save Changes" : "Add Client"}
+            {saving ? "Saving…" : isEdit ? "Save Changes" : "Add Client"}
           </button>
         </div>
       }
@@ -177,9 +191,7 @@ export function ClientModal({ isOpen, onClose, onSave, client }: ClientModalProp
             />
           </div>
           <div>
-            <label className="block text-[12px] font-semibold text-gray-700 mb-1.5">
-              Status
-            </label>
+            <label className="block text-[12px] font-semibold text-gray-700 mb-1.5">Status</label>
             <select
               value={form.status}
               onChange={(e) => set("status", e.target.value as ClientStatus)}
@@ -205,6 +217,14 @@ export function ClientModal({ isOpen, onClose, onSave, client }: ClientModalProp
             className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 resize-none"
           />
         </div>
+
+        {/* Save error */}
+        {saveError && (
+          <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5">
+            <AlertCircle className="size-3.5 text-red-500 mt-0.5 shrink-0" />
+            <p className="text-[12px] text-red-600 leading-snug">{saveError}</p>
+          </div>
+        )}
       </form>
     </Modal>
   )

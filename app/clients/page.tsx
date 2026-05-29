@@ -2,21 +2,13 @@
 
 import { useState, useMemo } from "react"
 import {
-  Search,
-  Plus,
-  Pencil,
-  Trash2,
-  Mail,
-  MailCheck,
-  KeyRound,
-  Users,
-  UserCheck,
-  UserX,
-  UserPlus,
-  ChevronLeft,
-  ChevronRight,
+  Search, Plus, Pencil, Trash2,
+  Mail, MailCheck, KeyRound,
+  Users, UserCheck, UserX, UserPlus,
+  ChevronLeft, ChevronRight,
+  AlertCircle,
 } from "lucide-react"
-import { useRole, useClients } from "@/components/layout/app-shell"
+import { useRole, useClients, useIsMockMode } from "@/components/layout/app-shell"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { IconButton } from "@/components/ui/icon-button"
@@ -24,6 +16,13 @@ import { EmptyState } from "@/components/ui/empty-state"
 import { StatCard } from "@/components/ui/stat-card"
 import { ConfirmModal } from "@/components/ui/confirm-modal"
 import { ClientModal, type ClientFormData } from "@/components/clients/client-modal"
+import {
+  createClient,
+  updateClient,
+  archiveClient,
+  sendInvite,
+  resetPassword,
+} from "@/app/clients/actions"
 import type { Client, ClientStatus, DataTableColumn } from "@/lib/types"
 
 const PAGE_SIZE = 8
@@ -45,28 +44,25 @@ function avatarColor(id: string) {
 }
 
 function initials(name: string) {
-  return name
-    .split(" ")
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0].toUpperCase())
-    .join("")
+  return name.split(" ").filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join("")
 }
 
 export default function ClientsPage() {
-  const { role } = useRole()
+  const { role }   = useRole()
+  const isMockMode = useIsMockMode()
   const { clients, setClients } = useClients()
 
-  const [search, setSearch] = useState("")
+  const [search,       setSearch]       = useState("")
   const [statusFilter, setStatusFilter] = useState<ClientStatus | "all">("all")
-  const [page, setPage] = useState(1)
-  const [modalOpen, setModalOpen] = useState(false)
-  const [editing, setEditing] = useState<Client | null>(null)
+  const [page,         setPage]         = useState(1)
+  const [modalOpen,    setModalOpen]    = useState(false)
+  const [editing,      setEditing]      = useState<Client | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<Client | null>(null)
-  const [inviteSent, setInviteSent] = useState<string | null>(null)
+  const [inviteSent,   setInviteSent]   = useState<string | null>(null)
+  const [actionError,  setActionError]  = useState<string | null>(null)
 
-  // All hooks must come before any conditional return.
-  const visible = clients.filter((c) => !c.isArchived)
+  // All hooks before conditional return
+  const visible  = clients.filter((c) => !c.isArchived)
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
     return visible.filter((c) => {
@@ -93,74 +89,117 @@ export default function ClientsPage() {
     )
   }
 
-  /* ── Stat counts ─────────────────────────────────── */
+  /* ── Stat counts ──────────────────────────────────────── */
   const counts = {
-    active: visible.filter((c) => c.status === "Active").length,
-    pending: visible.filter((c) => c.status === "Pending").length,
+    active:   visible.filter((c) => c.status === "Active").length,
+    pending:  visible.filter((c) => c.status === "Pending").length,
     inactive: visible.filter((c) => c.status === "Inactive").length,
-    invited: visible.filter((c) => c.loginStatus === "Invited").length,
+    invited:  visible.filter((c) => c.loginStatus === "Invited").length,
   }
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const safePage = Math.min(page, totalPages)
-  const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  const safePage   = Math.min(page, totalPages)
+  const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
-  /* ── Actions ─────────────────────────────────────── */
-  function openCreate() {
-    setEditing(null)
-    setModalOpen(true)
+  /* ── Helpers ──────────────────────────────────────────── */
+  function openCreate() { setEditing(null); setModalOpen(true) }
+  function openEdit(c: Client) { setEditing(c); setModalOpen(true) }
+
+  function flashError(msg: string) {
+    setActionError(msg)
+    setTimeout(() => setActionError(null), 4000)
   }
 
-  function openEdit(c: Client) {
-    setEditing(c)
-    setModalOpen(true)
-  }
-
-  function handleSave(data: ClientFormData) {
-    if (editing) {
-      setClients((prev) =>
-        prev.map((c) =>
-          c.id === editing.id
-            ? { ...c, ...data }
-            : c
-        )
-      )
-    } else {
-      const newClient: Client = {
-        id: `c${Date.now()}`,
-        companyName: data.companyName,
-        contactName: data.contactName,
-        email: data.email,
-        phone: data.phone,
-        notes: data.notes,
-        status: data.status,
-        loginStatus: "No Login",
-        lastActivity: null,
+  /* ── Save ─────────────────────────────────────────────── */
+  async function handleSave(data: ClientFormData) {
+    if (isMockMode) {
+      if (editing) {
+        setClients((prev) => prev.map((c) => c.id === editing.id ? { ...c, ...data } : c))
+      } else {
+        const newClient: Client = {
+          id:          `c${Date.now()}`,
+          companyName: data.companyName,
+          contactName: data.contactName,
+          email:       data.email,
+          phone:       data.phone,
+          notes:       data.notes,
+          status:      data.status,
+          loginStatus: "No Login",
+          lastActivity: null,
+        }
+        setClients((prev) => [newClient, ...prev])
       }
-      setClients((prev) => [newClient, ...prev])
+      setModalOpen(false)
+      return
+    }
+
+    // Supabase mode — throws on error (ClientModal catches and shows it)
+    if (editing) {
+      const updated = await updateClient(editing.id, data)
+      setClients((prev) => prev.map((c) => c.id === editing.id ? updated : c))
+    } else {
+      const created = await createClient(data)
+      setClients((prev) => [created, ...prev])
     }
     setModalOpen(false)
   }
 
-  function handleDelete(c: Client) {
-    setClients((prev) => prev.map((x) => (x.id === c.id ? { ...x, isArchived: true } : x)))
+  /* ── Archive / delete ─────────────────────────────────── */
+  async function handleDelete(c: Client) {
+    if (isMockMode) {
+      setClients((prev) => prev.map((x) => (x.id === c.id ? { ...x, isArchived: true } : x)))
+      setDeleteTarget(null)
+      return
+    }
+    try {
+      await archiveClient(c.id)
+      setClients((prev) => prev.filter((x) => x.id !== c.id))
+    } catch (err) {
+      flashError(err instanceof Error ? err.message : "Failed to archive client.")
+    }
     setDeleteTarget(null)
   }
 
-  function handleSendInvite(c: Client) {
-    setClients((prev) =>
-      prev.map((x) =>
-        x.id === c.id
-          ? {
-              ...x,
-              loginStatus: "Invited",
-              invitedAt: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
-            }
-          : x
+  /* ── Send / resend invite ─────────────────────────────── */
+  async function handleSendInvite(c: Client) {
+    if (isMockMode) {
+      setClients((prev) =>
+        prev.map((x) =>
+          x.id === c.id
+            ? {
+                ...x,
+                loginStatus: "Invited",
+                invitedAt: new Date().toLocaleDateString("en-US", {
+                  month: "short", day: "numeric", year: "numeric",
+                }),
+              }
+            : x
+        )
       )
-    )
-    setInviteSent(c.id)
-    setTimeout(() => setInviteSent(null), 2500)
+      setInviteSent(c.id)
+      setTimeout(() => setInviteSent(null), 2500)
+      return
+    }
+    try {
+      const updated = await sendInvite(c.id)
+      setClients((prev) => prev.map((x) => x.id === c.id ? updated : x))
+      setInviteSent(c.id)
+      setTimeout(() => setInviteSent(null), 2500)
+    } catch (err) {
+      flashError(err instanceof Error ? err.message : "Failed to send invite.")
+    }
+  }
+
+  /* ── Reset password ───────────────────────────────────── */
+  async function handleResetPassword(c: Client) {
+    if (isMockMode) return
+    try {
+      await resetPassword(c.id)
+      setInviteSent(c.id) // reuse the "sent" flash for visual feedback
+      setTimeout(() => setInviteSent(null), 2500)
+    } catch (err) {
+      flashError(err instanceof Error ? err.message : "Failed to send password reset.")
+    }
   }
 
   function handleStatClick(s: ClientStatus) {
@@ -168,7 +207,7 @@ export default function ClientsPage() {
     setPage(1)
   }
 
-  /* ── Columns ─────────────────────────────────────── */
+  /* ── Columns ──────────────────────────────────────────── */
   const columns: DataTableColumn<Client>[] = [
     {
       id: "client",
@@ -194,9 +233,7 @@ export default function ClientsPage() {
     {
       id: "contact",
       header: "Contact Name",
-      cell: (row) => (
-        <span className="text-[13px] text-gray-700">{row.contactName}</span>
-      ),
+      cell: (row) => <span className="text-[13px] text-gray-700">{row.contactName}</span>,
     },
     {
       id: "email",
@@ -280,14 +317,15 @@ export default function ClientsPage() {
             {row.loginStatus === "Active" && (
               <IconButton
                 variant="default"
-                title="Reset Password"
-                onClick={() => {}}
+                title="Send Password Reset"
+                onClick={() => handleResetPassword(row)}
+                className={justSent ? "text-green-600 bg-green-50" : ""}
               >
                 <KeyRound className="size-3.5" />
               </IconButton>
             )}
 
-            {/* Archive / Delete */}
+            {/* Archive */}
             <IconButton
               variant="danger"
               title="Remove Client"
@@ -301,7 +339,7 @@ export default function ClientsPage() {
     },
   ]
 
-  /* ── Render ──────────────────────────────────────── */
+  /* ── Render ───────────────────────────────────────────── */
   return (
     <div className="flex flex-col gap-4 h-full">
       {/* Page header */}
@@ -320,6 +358,14 @@ export default function ClientsPage() {
           Add Client
         </button>
       </div>
+
+      {/* Action error banner */}
+      {actionError && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-4 py-3">
+          <AlertCircle className="size-4 text-red-500 mt-0.5 shrink-0" />
+          <p className="text-[13px] text-red-600">{actionError}</p>
+        </div>
+      )}
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

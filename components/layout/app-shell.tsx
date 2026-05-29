@@ -17,7 +17,8 @@ import { listProducts } from "@/app/products/actions"
 import { listShipments } from "@/app/shipments/actions"
 import { listRequests }  from "@/app/service-requests/actions"
 import { listFiles }     from "@/app/files/actions"
-import { listInvoices }  from "@/app/invoices/actions"
+import { listInvoices }       from "@/app/invoices/actions"
+import { listClients, activateClientLogin } from "@/app/clients/actions"
 
 // ── Context type ──────────────────────────────────────────────
 
@@ -125,7 +126,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [requests,  setRequests]  = useState<ServiceRequest[]>(isMockMode ? mockRequests : [])
   const [files,     setFiles]     = useState<FileDoc[]>(isMockMode ? mockFiles : [])
   const [invoices,  setInvoices]  = useState<Invoice[]>(isMockMode ? mockInvoices : [])
-  const [clients,   setClients]   = useState<Client[]>(mockClients)
+  const [clients,   setClients]   = useState<Client[]>(isMockMode ? mockClients : [])
 
   // ── Session initialisation ───────────────────────────────────
   useEffect(() => {
@@ -141,19 +142,28 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         setRole(shaped.role)
         // Load all connected modules together; keep spinner until ready
         // to avoid a flash of empty-state tables.
+        // If this is a client user logging in for the first time (invited → active),
+        // promote their login_status before loading data.
+        if (shaped.role === "client") {
+          activateClientLogin().catch(() => {})
+        }
+
         try {
-          const [productsData, shipmentsData, requestsData, filesData, invoicesData] = await Promise.all([
-            listProducts(),
-            listShipments(),
-            listRequests(),
-            listFiles(),
-            listInvoices(),
-          ])
+          const [productsData, shipmentsData, requestsData, filesData, invoicesData, clientsData] =
+            await Promise.all([
+              listProducts(),
+              listShipments(),
+              listRequests(),
+              listFiles(),
+              listInvoices(),
+              listClients(),
+            ])
           setProducts(productsData)
           setShipments(shipmentsData)
           setRequests(requestsData)
           setFiles(filesData)
           setInvoices(invoicesData)
+          setClients(clientsData)
         } catch {
           // Leave data empty; pages will show their empty states.
         }
