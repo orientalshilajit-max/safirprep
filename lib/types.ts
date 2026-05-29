@@ -136,6 +136,39 @@ export type ServiceRequest = {
   inventoryDeducted?: boolean
 }
 
+export type FileCategory =
+  | "Agreements"
+  | "Labels"
+  | "Shipment Docs"
+  | "Product Docs"
+  | "Invoices"
+  | "Other"
+
+export const FILE_CATEGORIES: FileCategory[] = [
+  "Agreements",
+  "Labels",
+  "Shipment Docs",
+  "Product Docs",
+  "Invoices",
+  "Other",
+]
+
+export type FileDoc = {
+  id: string
+  name: string
+  ext: string
+  size: string
+  category: FileCategory
+  relatedTo: string
+  relatedType: "service-request" | "shipment" | "product" | "invoice" | "agreement" | "general"
+  relatedId: string
+  clientId: string
+  clientName: string
+  uploadedBy: string
+  uploadedAt: string
+  notes?: string
+}
+
 export type DataTableColumn<T> = {
   id: string
   header: string
