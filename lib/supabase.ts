@@ -16,114 +16,71 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js"
 import type { Database } from "./database.types"
 
-// ── Environment variable validation ──────────────────────────
+// ── Configuration check ───────────────────────────────────────
+// NEXT_PUBLIC_* vars are inlined at build time by Next.js.
+// Reading them here is safe in both server and client contexts.
 
-const supabaseUrl  = process.env.NEXT_PUBLIC_SUPABASE_URL
-const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-
-// Fail loudly at runtime (not build time) if vars are missing.
-// During mock-only development these vars are optional — the client
-// is defined but never called, so no runtime error is thrown.
-function getCheckedUrl(): string {
-  if (!supabaseUrl) {
-    throw new Error(
-      "[Supabase] NEXT_PUBLIC_SUPABASE_URL is not set.\n" +
-      "Copy .env.local.example → .env.local and fill in your project URL."
-    )
-  }
-  return supabaseUrl
-}
-
-function getCheckedAnon(): string {
-  if (!supabaseAnon) {
-    throw new Error(
-      "[Supabase] NEXT_PUBLIC_SUPABASE_ANON_KEY is not set.\n" +
-      "Copy .env.local.example → .env.local and fill in your anon key."
-    )
-  }
-  return supabaseAnon
+export function isSupabaseConfigured(): boolean {
+  return !!(
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+  )
 }
 
 // ── Browser / client-side client ─────────────────────────────
-// Singleton — safe to import anywhere in client components.
-// Uses the anon key; RLS policies enforce all access control.
+// Singleton — safe to call in any client component.
+// Uses the anon key; all access control is enforced via RLS.
+// Returns null when Supabase is not configured (mock/dev mode).
 
 let _browserClient: SupabaseClient<Database> | null = null
 
 export function createBrowserClient(): SupabaseClient<Database> {
-  if (!_browserClient) {
-    _browserClient = createClient<Database>(getCheckedUrl(), getCheckedAnon(), {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-      },
-    })
+  if (_browserClient) return _browserClient
+
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+
+  if (!url || !key) {
+    throw new Error(
+      "[Supabase] NEXT_PUBLIC_SUPABASE_URL or NEXT_PUBLIC_SUPABASE_ANON_KEY is not set.\n" +
+      "Copy .env.local.example → .env.local and fill in your project credentials.\n" +
+      "In mock/dev mode, check isSupabaseConfigured() before calling this function."
+    )
   }
+
+  _browserClient = createClient<Database>(url, key, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+    },
+  })
+
   return _browserClient
 }
 
-// Convenience alias used throughout the app once Supabase is wired in.
-export const supabase = {
-  get client() {
-    return createBrowserClient()
-  },
-}
+// ── Server-side admin client ──────────────────────────────────
+// Uses the service role key — bypasses RLS entirely.
+// ONLY use in Next.js Route Handlers or Server Actions.
+// Never import this in client components or pages.
 
-// ── Server-side / admin client ────────────────────────────────
-// Uses the service role key — bypasses RLS.
-// ONLY use in Next.js Route Handlers or Server Actions, never in
-// client components or pages.
-
-export function createServerClient(): SupabaseClient<Database> {
+export function createServerAdminClient(): SupabaseClient<Database> {
+  const url        = process.env.NEXT_PUBLIC_SUPABASE_URL
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
-  if (!serviceKey) {
+
+  if (!url || !serviceKey) {
     throw new Error(
-      "[Supabase] SUPABASE_SERVICE_ROLE_KEY is not set.\n" +
+      "[Supabase] NEXT_PUBLIC_SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is not set.\n" +
       "Required for server-side admin operations."
     )
   }
-  return createClient<Database>(getCheckedUrl(), serviceKey, {
+
+  return createClient<Database>(url, serviceKey, {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
     },
   })
-}
-
-// ============================================================
-// AUTH HELPERS (stubs — implement once auth is wired in)
-// ============================================================
-
-export type AppRole = "admin" | "client"
-
-/**
- * Read the user's role from their JWT app_metadata.
- * Returns null if the user is not authenticated.
- *
- * Usage (once auth is live):
- *   const role = await getRole()
- */
-export async function getRole(): Promise<AppRole | null> {
-  // TODO: Replace with real session read once Supabase Auth is connected.
-  // const { data: { session } } = await createBrowserClient().auth.getSession()
-  // if (!session) return null
-  // return (session.user.app_metadata?.role as AppRole) ?? "client"
-  return null
-}
-
-/**
- * Read the client_id from the authenticated user's JWT.
- * Returns null for admins or unauthenticated users.
- *
- * Usage (once auth is live):
- *   const clientId = await getClientId()
- */
-export async function getClientId(): Promise<string | null> {
-  // TODO: Replace with real session read once Supabase Auth is connected.
-  // const { data: { session } } = await createBrowserClient().auth.getSession()
-  // if (!session) return null
-  // return session.user.app_metadata?.client_id ?? null
-  return null
 }
 
 // ============================================================
