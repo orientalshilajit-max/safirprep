@@ -14,6 +14,7 @@ import { mockFiles } from "@/lib/mock-files"
 import { mockInvoices } from "@/lib/mock-invoices"
 import { mockClients } from "@/lib/mock-clients"
 import { listProducts } from "@/app/products/actions"
+import { listShipments } from "@/app/shipments/actions"
 
 // ── Context type ──────────────────────────────────────────────
 
@@ -117,7 +118,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // In mock mode: pre-populated with mock data.
   // In Supabase mode: starts empty; filled after auth resolves.
   const [products,  setProducts]  = useState<Product[]>(isMockMode ? mockProducts : [])
-  const [shipments, setShipments] = useState<Shipment[]>(mockShipments)
+  const [shipments, setShipments] = useState<Shipment[]>(isMockMode ? mockShipments : [])
   const [requests,  setRequests]  = useState<ServiceRequest[]>(mockRequests)
   const [files,     setFiles]     = useState<FileDoc[]>(mockFiles)
   const [invoices,  setInvoices]  = useState<Invoice[]>(mockInvoices)
@@ -135,13 +136,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         const shaped = shapeUser(user)
         setAuthUser(shaped)
         setRole(shaped.role)
-        // Load real products; keep spinner until data is ready to avoid
-        // a flash of the empty-state table.
+        // Load products + shipments together; keep spinner until both are ready
+        // to avoid a flash of the empty-state tables.
         try {
-          const data = await listProducts()
-          setProducts(data)
+          const [productsData, shipmentsData] = await Promise.all([
+            listProducts(),
+            listShipments(),
+          ])
+          setProducts(productsData)
+          setShipments(shipmentsData)
         } catch {
-          // Leave products empty; the page will show its empty state.
+          // Leave data empty; pages will show their empty states.
         }
       }
       setAuthLoading(false)

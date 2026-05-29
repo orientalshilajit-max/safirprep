@@ -1,13 +1,13 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import {
   Search, SlidersHorizontal, Plus, Pencil, Archive, Trash2,
   Truck, PackageCheck, PackageOpen, AlertTriangle,
   ChevronLeft, ChevronRight,
 } from "lucide-react"
-import { useRole, useShipments, useProducts } from "@/components/layout/app-shell"
+import { useRole, useShipments, useProducts, useIsMockMode } from "@/components/layout/app-shell"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { IconButton } from "@/components/ui/icon-button"
@@ -15,6 +15,11 @@ import { EmptyState } from "@/components/ui/empty-state"
 import { StatCard } from "@/components/ui/stat-card"
 import { ConfirmModal } from "@/components/ui/confirm-modal"
 import { ShipmentModal } from "@/components/shipments/shipment-modal"
+import {
+  archiveShipment,
+  softDeleteShipment,
+} from "@/app/shipments/actions"
+import { listProductClients } from "@/app/products/actions"
 import type { Shipment, ShipmentStatus, DataTableColumn } from "@/lib/types"
 
 const PAGE_SIZE = 8
@@ -22,24 +27,33 @@ const PAGE_SIZE = 8
 const RECEIVED_STATUSES: ShipmentStatus[] = ["Received", "Partially Received"]
 
 export default function ShipmentsPage() {
-  const router = useRouter()
-  const { role } = useRole()
+  const router     = useRouter()
+  const { role }   = useRole()
+  const isMockMode = useIsMockMode()
   const { shipments, setShipments } = useShipments()
-  const { setProducts } = useProducts()
+  const { setProducts }             = useProducts()
 
-  const [search, setSearch] = useState("")
+  const [search,       setSearch]       = useState("")
   const [statusFilter, setStatusFilter] = useState<ShipmentStatus | "all">("all")
-  const [page, setPage] = useState(1)
-  const [createOpen, setCreateOpen] = useState(false)
+  const [page,         setPage]         = useState(1)
+  const [createOpen,   setCreateOpen]   = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Shipment | null>(null)
+
+  // Client list for admin's Create Shipment selector (Supabase mode only)
+  const [pageClients, setPageClients] = useState<{ id: string; name: string }[]>([])
+  useEffect(() => {
+    if (!isMockMode && role === "admin") {
+      listProductClients().then(setPageClients).catch(() => {})
+    }
+  }, [isMockMode, role])
 
   /* ── Stat card counts ────────────────────────────────── */
   const active = shipments.filter((s) => !s.isArchived)
   const counts = {
-    "In Transit": active.filter((s) => s.status === "In Transit").length,
-    Arrived: active.filter((s) => s.status === "Arrived").length,
-    Received: active.filter((s) => RECEIVED_STATUSES.includes(s.status)).length,
-    "Need Attention": active.filter((s) => s.status === "Need Attention").length,
+    "In Transit":      active.filter((s) => s.status === "In Transit").length,
+    Arrived:           active.filter((s) => s.status === "Arrived").length,
+    Received:          active.filter((s) => RECEIVED_STATUSES.includes(s.status)).length,
+    "Need Attention":  active.filter((s) => s.status === "Need Attention").length,
   }
 
   /* ── Filtered + paginated ────────────────────────────── */
@@ -60,13 +74,13 @@ export default function ShipmentsPage() {
   }, [active, search, statusFilter])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const safePage = Math.min(page, totalPages)
-  const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  const safePage   = Math.min(page, totalPages)
+  const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
   /* ── Actions ─────────────────────────────────────────── */
   function handleCreate(shipment: Shipment) {
     setShipments((prev) => [shipment, ...prev])
-    // Increase Incoming quantity for every product in this shipment
+    // Increment in-context product incoming counts to reflect DB change
     setProducts((prev) =>
       prev.map((p) => {
         const sp = shipment.products.find((x) => x.productId === p.id)
@@ -76,12 +90,40 @@ export default function ShipmentsPage() {
     setCreateOpen(false)
   }
 
-  function handleArchive(id: string) {
-    setShipments((prev) => prev.map((s) => (s.id === id ? { ...s, isArchived: true } : s)))
+  async function handleArchive(id: string) {
+    if (isMockMode) {
+      setShipments((prev) => prev.map((s) => (s.id === id ? { ...s, isArchived: true } : s)))
+      return
+    }
+    try {
+      await archiveShipment(id)
+      setShipments((prev) => prev.map((s) => (s.id === id ? { ...s, isArchived: true } : s)))
+    } catch (err) {
+      console.error("[ShipmentsPage] archiveShipment failed:", err)
+    }
   }
 
-  function handleDelete(id: string) {
-    setShipments((prev) => prev.filter((s) => s.id !== id))
+  async function handleDelete(id: string) {
+    if (isMockMode) {
+      setShipments((prev) => prev.filter((s) => s.id !== id))
+      return
+    }
+    try {
+      await softDeleteShipment(id)
+      setShipments((prev) => prev.filter((s) => s.id !== id))
+      // Also reverse the incoming_units in context (action already reversed DB)
+      const deleted = shipments.find((s) => s.id === id)
+      if (deleted && !deleted.isInventoryUpdated) {
+        setProducts((prev) =>
+          prev.map((p) => {
+            const sp = deleted.products.find((x) => x.productId === p.id)
+            return sp ? { ...p, incoming: Math.max(0, p.incoming - sp.units) } : p
+          })
+        )
+      }
+    } catch (err) {
+      console.error("[ShipmentsPage] softDeleteShipment failed:", err)
+    }
   }
 
   function handleStatClick(status: ShipmentStatus | "all") {
@@ -145,9 +187,7 @@ export default function ShipmentsPage() {
       id: "carrier",
       header: "Carrier",
       cell: (row) => (
-        <span className="text-[12px] text-gray-600">
-          {row.tracking[0]?.carrier ?? "—"}
-        </span>
+        <span className="text-[12px] text-gray-600">{row.tracking[0]?.carrier ?? "—"}</span>
       ),
     },
     {
@@ -223,9 +263,7 @@ export default function ShipmentsPage() {
           <h1 className="text-[20px] font-bold text-gray-900 leading-tight">
             Incoming Shipments
           </h1>
-          <p className="text-[13px] text-gray-400 mt-0.5">
-            Track your incoming shipments
-          </p>
+          <p className="text-[13px] text-gray-400 mt-0.5">Track your incoming shipments</p>
         </div>
         <button
           onClick={() => setCreateOpen(true)}
@@ -399,6 +437,7 @@ export default function ShipmentsPage() {
         isOpen={createOpen}
         onClose={() => setCreateOpen(false)}
         onSave={handleCreate}
+        clients={!isMockMode ? pageClients : undefined}
       />
 
       {/* Delete confirmation */}

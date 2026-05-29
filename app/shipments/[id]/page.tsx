@@ -2,10 +2,11 @@
 
 import { useState, useRef } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { ArrowLeft, Plus, X, Save, Paperclip, FileText, File, Archive } from "lucide-react"
-import { useRole, useProducts, useShipments, useFiles } from "@/components/layout/app-shell"
+import { ArrowLeft, Plus, X, Save, Paperclip, FileText, File, Archive, AlertCircle } from "lucide-react"
+import { useRole, useProducts, useShipments, useFiles, useIsMockMode } from "@/components/layout/app-shell"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { CARRIERS } from "@/lib/types"
+import { updateShipment } from "@/app/shipments/actions"
 import type { Shipment, ShipmentProduct, ShipmentTracking, ShipmentStatus, FileDoc } from "@/lib/types"
 
 const STATUSES: ShipmentStatus[] = [
@@ -21,32 +22,27 @@ const RECEIVED_STATUSES: ShipmentStatus[] = ["Received", "Partially Received"]
 const uid = () => Math.random().toString(36).slice(2)
 
 export default function EditShipmentPage() {
-  const params = useParams<{ id: string }>()
-  const router = useRouter()
+  const params   = useParams<{ id: string }>()
+  const router   = useRouter()
   const { role } = useRole()
-  const { products } = useProducts()
+  const { products }             = useProducts()
   const { shipments, setShipments } = useShipments()
-  const { setProducts } = useProducts()
-  const { files, setFiles } = useFiles()
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  const { setProducts }          = useProducts()
+  const { files, setFiles }      = useFiles()
+  const isMockMode               = useIsMockMode()
+  const fileInputRef             = useRef<HTMLInputElement>(null)
 
   const shipment = shipments.find((s) => s.id === params.id)
 
-  /* ── Local edit state — lazy-initialised from shipment ─────── */
-  const [status, setStatus] = useState<ShipmentStatus>(
-    () => shipment?.status ?? "In Transit"
-  )
-  const [originalStatus, setOriginalStatus] = useState<ShipmentStatus>(
-    () => shipment?.status ?? "In Transit"
-  )
-  const [shipProducts, setShipProducts] = useState<ShipmentProduct[]>(
-    () => shipment ? shipment.products.map((p) => ({ ...p })) : []
-  )
-  const [shipTracking, setShipTracking] = useState<ShipmentTracking[]>(
-    () => shipment ? shipment.tracking.map((t) => ({ ...t })) : []
-  )
-  const [notes, setNotes] = useState<string>(() => shipment?.notes ?? "")
-  const [saved, setSaved] = useState(false)
+  /* ── Local edit state — lazy-initialised from shipment ─── */
+  const [status,         setStatus]         = useState<ShipmentStatus>(() => shipment?.status ?? "In Transit")
+  const [originalStatus, setOriginalStatus] = useState<ShipmentStatus>(() => shipment?.status ?? "In Transit")
+  const [shipProducts,   setShipProducts]   = useState<ShipmentProduct[]>(() => shipment ? shipment.products.map((p) => ({ ...p })) : [])
+  const [shipTracking,   setShipTracking]   = useState<ShipmentTracking[]>(() => shipment ? shipment.tracking.map((t) => ({ ...t })) : [])
+  const [notes,          setNotes]          = useState<string>(() => shipment?.notes ?? "")
+  const [saved,          setSaved]          = useState(false)
+  const [saving,         setSaving]         = useState(false)
+  const [saveError,      setSaveError]      = useState<string | null>(null)
 
   if (!shipment) {
     return (
@@ -87,49 +83,99 @@ export default function EditShipmentPage() {
   }
 
   /* ── Save ─────────────────────────────────────────────── */
-  function handleSave() {
-    const updated: Shipment = {
-      id: shipment!.id,
-      shipmentNumber: shipment!.shipmentNumber,
-      clientId: shipment!.clientId,
-      clientName: shipment!.clientName,
-      status,
-      products: shipProducts,
-      tracking: shipTracking,
-      notes,
-      isArchived: shipment!.isArchived,
-      createdAt: shipment!.createdAt,
-    }
+  async function handleSave() {
+    setSaveError(null)
 
-    // Apply inventory update if transitioning INTO a received status
     const wasReceived = RECEIVED_STATUSES.includes(originalStatus)
     const nowReceived = RECEIVED_STATUSES.includes(status)
-    const shouldUpdateInventory = role === "admin" && nowReceived && !wasReceived && !shipment!.isInventoryUpdated
+    const shouldSyncInventory =
+      role === "admin" && nowReceived && !wasReceived && !shipment!.isInventoryUpdated
 
-    if (shouldUpdateInventory) {
-      updated.isInventoryUpdated = true
-      setProducts((prev) =>
-        prev.map((p) => {
-          const sp = shipProducts.find((x) => x.productId === p.id)
-          if (!sp) return p
-          return {
-            ...p,
-            available: p.available + sp.receivedUnits,
-            incoming: Math.max(0, p.incoming - sp.units),
-            damaged: p.damaged + sp.damagedUnits,
-          }
-        })
-      )
+    if (isMockMode) {
+      // ── Mock mode (unchanged behaviour) ──────────────────
+      const updated: Shipment = {
+        id:             shipment!.id,
+        shipmentNumber: shipment!.shipmentNumber,
+        clientId:       shipment!.clientId,
+        clientName:     shipment!.clientName,
+        status,
+        products:       shipProducts,
+        tracking:       shipTracking,
+        notes,
+        isArchived:     shipment!.isArchived,
+        createdAt:      shipment!.createdAt,
+      }
+
+      if (shouldSyncInventory) {
+        updated.isInventoryUpdated = true
+        setProducts((prev) =>
+          prev.map((p) => {
+            const sp = shipProducts.find((x) => x.productId === p.id)
+            if (!sp) return p
+            return {
+              ...p,
+              available: p.available + sp.receivedUnits,
+              incoming:  Math.max(0, p.incoming - sp.units),
+              damaged:   p.damaged + sp.damagedUnits,
+            }
+          })
+        )
+      }
+
+      setShipments((prev) => prev.map((s) => (s.id === shipment!.id ? updated : s)))
+      setSaved(true)
+      setTimeout(() => router.push("/shipments"), 300)
+      return
     }
 
-    setShipments((prev) => prev.map((s) => (s.id === shipment!.id ? updated : s)))
-    setSaved(true)
-    setTimeout(() => {
+    // ── Supabase mode ─────────────────────────────────────
+    setSaving(true)
+    try {
+      const updated = await updateShipment(shipment!.id, {
+        status,
+        notes,
+        products: shipProducts.map((sp) => ({
+          productId:     sp.productId,
+          units:         sp.units,
+          receivedUnits: sp.receivedUnits,
+          damagedUnits:  sp.damagedUnits,
+          notes:         sp.notes,
+        })),
+        tracking: shipTracking.map((t) => ({
+          carrier:        t.carrier,
+          trackingNumber: t.trackingNumber,
+          boxCount:       t.boxCount,
+          notes:          t.notes,
+        })),
+      })
+
+      // Update shipment in context
+      setShipments((prev) => prev.map((s) => (s.id === shipment!.id ? updated : s)))
+
+      // Reflect inventory change in products context (immediate UI feedback)
+      if (shouldSyncInventory) {
+        setProducts((prev) =>
+          prev.map((p) => {
+            const sp = shipProducts.find((x) => x.productId === p.id)
+            if (!sp) return p
+            return {
+              ...p,
+              available: p.available + sp.receivedUnits,
+              incoming:  Math.max(0, p.incoming - sp.units),
+              damaged:   p.damaged + sp.damagedUnits,
+            }
+          })
+        )
+      }
+
       router.push("/shipments")
-    }, 300)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save shipment.")
+      setSaving(false)
+    }
   }
 
-  /* ── Shipment files (from Files context) ─────────────── */
+  /* ── Shipment files (mock only — Files not connected yet) ── */
   const shipmentFiles = files.filter(
     (f) => f.relatedType === "shipment" && f.relatedId === params.id
   )
@@ -141,24 +187,26 @@ export default function EditShipmentPage() {
   function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file || !shipment) return
-    const ext = file.name.split(".").pop()?.toLowerCase() ?? "bin"
+    const ext    = file.name.split(".").pop()?.toLowerCase() ?? "bin"
     const sizeFmt =
       file.size < 1024 * 1024
         ? `${Math.round(file.size / 1024)} KB`
         : `${(file.size / 1024 / 1024).toFixed(1)} MB`
     const newDoc: FileDoc = {
-      id: `fd-ship-${Date.now()}`,
-      name: file.name,
+      id:          `fd-ship-${Date.now()}`,
+      name:        file.name,
       ext,
-      size: sizeFmt,
-      category: "Shipment Docs",
-      relatedTo: shipment.shipmentNumber,
+      size:        sizeFmt,
+      category:    "Shipment Docs",
+      relatedTo:   shipment.shipmentNumber,
       relatedType: "shipment",
-      relatedId: shipment.id,
-      clientId: shipment.clientId,
-      clientName: shipment.clientName,
-      uploadedBy: role === "admin" ? "Safir WMS" : shipment.clientName,
-      uploadedAt: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+      relatedId:   shipment.id,
+      clientId:    shipment.clientId,
+      clientName:  shipment.clientName,
+      uploadedBy:  role === "admin" ? "Safir WMS" : shipment.clientName,
+      uploadedAt:  new Date().toLocaleDateString("en-US", {
+        month: "short", day: "numeric", year: "numeric",
+      }),
     }
     setFiles((prev) => [newDoc, ...prev])
     e.target.value = ""
@@ -173,9 +221,9 @@ export default function EditShipmentPage() {
     return <File className="size-3.5 text-gray-400" />
   }
 
-  const isAdmin = role === "admin"
+  const isAdmin        = role === "admin"
   const activeProducts = products.filter((p) => p.status === "Active")
-  const totalUnits = shipProducts.reduce((s, p) => s + p.units, 0)
+  const totalUnits     = shipProducts.reduce((s, p) => s + p.units, 0)
   const currentShipment = shipment!
 
   /* ── Render ──────────────────────────────────────────── */
@@ -192,13 +240,17 @@ export default function EditShipmentPage() {
             Back
           </button>
           <span className="text-gray-300">/</span>
-          <h1 className="text-[17px] font-bold text-gray-900">
-            {shipment.shipmentNumber}
-          </h1>
+          <h1 className="text-[17px] font-bold text-gray-900">{shipment.shipmentNumber}</h1>
           <StatusBadge status={currentShipment.status} />
         </div>
 
         <div className="flex items-center gap-2">
+          {saveError && (
+            <div className="flex items-center gap-1.5 text-[12px] text-red-600 bg-red-50 border border-red-100 px-3 py-1.5 rounded-lg">
+              <AlertCircle className="size-3.5 shrink-0" />
+              {saveError}
+            </div>
+          )}
           <button
             onClick={() => router.push("/shipments")}
             className="px-4 py-2 text-[13px] font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors"
@@ -207,11 +259,11 @@ export default function EditShipmentPage() {
           </button>
           <button
             onClick={handleSave}
-            disabled={saved}
+            disabled={saved || saving}
             className="flex items-center gap-1.5 px-4 py-2 text-[13px] font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-60"
           >
             <Save className="size-3.5" />
-            Save Changes
+            {saving ? "Saving…" : "Save Changes"}
           </button>
         </div>
       </div>
@@ -263,28 +315,16 @@ export default function EditShipmentPage() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
-                  Product
-                </th>
-                <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide w-24">
-                  SKU
-                </th>
-                <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wide w-24">
-                  Units
-                </th>
+                <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Product</th>
+                <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide w-24">SKU</th>
+                <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wide w-24">Units</th>
                 {isAdmin && (
                   <>
-                    <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wide w-28">
-                      Received
-                    </th>
-                    <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wide w-28">
-                      Damaged
-                    </th>
+                    <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wide w-28">Received</th>
+                    <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wide w-28">Damaged</th>
                   </>
                 )}
-                <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
-                  Notes
-                </th>
+                <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Notes</th>
                 <th className="w-10" />
               </tr>
             </thead>
@@ -297,18 +337,16 @@ export default function EditShipmentPage() {
                       onChange={(e) => {
                         const p = activeProducts.find((x) => x.id === e.target.value)
                         updateProduct(sp.id, {
-                          productId: e.target.value,
+                          productId:   e.target.value,
                           productName: p?.name ?? sp.productName,
-                          sku: p?.sku ?? sp.sku,
+                          sku:         p?.sku  ?? sp.sku,
                         })
                       }}
                       className="w-full max-w-xs px-2.5 py-1.5 text-[12px] border border-gray-200 rounded-md bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                     >
                       <option value="">Select product…</option>
                       {activeProducts.map((p) => (
-                        <option key={p.id} value={p.id}>
-                          {p.name}
-                        </option>
+                        <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
                       {sp.productId && !activeProducts.find((p) => p.id === sp.productId) && (
                         <option value={sp.productId}>{sp.productName}</option>
@@ -394,18 +432,10 @@ export default function EditShipmentPage() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide w-36">
-                  Carrier
-                </th>
-                <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
-                  Tracking Number
-                </th>
-                <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wide w-20">
-                  Boxes
-                </th>
-                <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide">
-                  Notes
-                </th>
+                <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide w-36">Carrier</th>
+                <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Tracking Number</th>
+                <th className="px-4 py-2.5 text-right text-[11px] font-semibold text-gray-500 uppercase tracking-wide w-20">Boxes</th>
+                <th className="px-4 py-2.5 text-left text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Notes</th>
                 <th className="w-10" />
               </tr>
             </thead>
@@ -509,12 +539,7 @@ export default function EditShipmentPage() {
             <Paperclip className="size-3.5" />
             Attach File
           </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            onChange={handleFileInputChange}
-          />
+          <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileInputChange} />
         </div>
         {shipmentFiles.length === 0 ? (
           <div className="py-8 text-center">
