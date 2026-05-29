@@ -1,7 +1,7 @@
 "use client"
 
 import { useRef, useState } from "react"
-import { FileText, Upload, X } from "lucide-react"
+import { FileText, Upload, X, AlertCircle } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import { useProducts, useRole } from "@/components/layout/app-shell"
 import { SERVICE_TYPES } from "@/lib/types"
@@ -83,6 +83,8 @@ function FileChip({ file, onRemove }: { file: ServiceFile; onRemove: (id: string
 
 /* ── Form state ─────────────────────────────────────────── */
 type FormState = {
+  /** Admin-only when creating in Supabase mode */
+  clientId: string
   productId: string
   quantity: number
   useAllAvailable: boolean
@@ -90,7 +92,6 @@ type FormState = {
   files: ServiceFile[]
   notes: string
   status: ServiceStatus
-  // service-specific text fields
   prepNotes: string
   orderNotes: string
   placementNotes: string
@@ -100,6 +101,7 @@ type FormState = {
 }
 
 const emptyForm = (): FormState => ({
+  clientId: "",
   productId: "",
   quantity: 0,
   useAllAvailable: false,
@@ -122,7 +124,7 @@ const inputClass =
 const textareaClass =
   "w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none placeholder:text-gray-400"
 
-/* ── ServiceFields — standalone so React doesn't recreate it on every render */
+/* ── ServiceFields ──────────────────────────────────────── */
 type ServiceFieldsProps = {
   service: ServiceType | ""
   form: FormState
@@ -206,79 +208,94 @@ function ServiceFields({ service, form, onSet, onAddFiles, canEdit }: ServiceFie
 type RequestModalProps = {
   isOpen: boolean
   onClose: () => void
-  onSave: (form: FormState) => void
+  /** May return a Promise; modal shows loading state while it resolves. */
+  onSave: (form: FormState) => void | Promise<void>
   request?: ServiceRequest | null
+  /** Admin-only: list of clients for the "assign to client" selector. */
+  clients?: { id: string; name: string }[]
 }
 
-export function RequestModal({ isOpen, onClose, onSave, request }: RequestModalProps) {
-  const { role } = useRole()
+export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }: RequestModalProps) {
+  const { role }   = useRole()
   const { products } = useProducts()
-  const [form, setForm] = useState<FormState>(emptyForm())
-  const [error, setError] = useState("")
-  // Track the (isOpen, request) pair we last initialised the form for.
+
+  const [form,      setFormState] = useState<FormState>(emptyForm())
+  const [error,     setError]     = useState("")
+  const [saveError, setSaveError] = useState("")
+  const [saving,    setSaving]    = useState(false)
+
   const [prevKey, setPrevKey] = useState<string>("")
   const currentKey = `${isOpen}|${request?.id ?? "__new__"}`
 
-  // Reset form during render when the modal opens for a new / different request.
   if (prevKey !== currentKey) {
     setPrevKey(currentKey)
     if (isOpen) {
-      setForm(request ? {
-        productId: request.productId,
-        quantity: request.quantity,
-        useAllAvailable: false,
-        service: request.service,
-        files: [...request.files],
-        notes: request.notes,
-        status: request.status,
-        prepNotes: request.serviceDetails.prepNotes ?? "",
-        orderNotes: request.serviceDetails.orderNotes ?? "",
-        placementNotes: request.serviceDetails.placementNotes ?? "",
+      setFormState(request ? {
+        clientId:           "",
+        productId:          request.productId,
+        quantity:           request.quantity,
+        useAllAvailable:    false,
+        service:            request.service,
+        files:              [...request.files],
+        notes:              request.notes,
+        status:             request.status,
+        prepNotes:          request.serviceDetails.prepNotes          ?? "",
+        orderNotes:         request.serviceDetails.orderNotes         ?? "",
+        placementNotes:     request.serviceDetails.placementNotes     ?? "",
         bundleInstructions: request.serviceDetails.bundleInstructions ?? "",
-        unitsPerBundle: request.serviceDetails.unitsPerBundle ?? 1,
+        unitsPerBundle:     request.serviceDetails.unitsPerBundle     ?? 1,
         serviceDescription: request.serviceDetails.serviceDescription ?? "",
-      } : emptyForm())
+      } : {
+        ...emptyForm(),
+        clientId: clients[0]?.id ?? "",
+      })
       setError("")
+      setSaveError("")
+      setSaving(false)
     }
   }
 
-  const isEdit = !!request
-  const isAdmin = role === "admin"
-  const activeProducts = products.filter((p) => p.status === "Active")
-  const selectedProduct = activeProducts.find((p) => p.id === form.productId)
-    ?? products.find((p) => p.id === form.productId) // include archived products on existing requests
+  const isEdit    = !!request
+  const isAdmin   = role === "admin"
+  const activeProducts   = products.filter((p) => p.status === "Active")
+  const selectedProduct  = activeProducts.find((p) => p.id === form.productId)
+    ?? products.find((p) => p.id === form.productId)
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
-    setForm((f) => ({ ...f, [key]: value }))
+    setFormState((f) => ({ ...f, [key]: value }))
   }
 
-  // Derive the effective quantity: if "use all available" is checked, pull
-  // directly from the product rather than syncing via a useEffect.
   const effectiveQuantity =
     form.useAllAvailable && selectedProduct
       ? selectedProduct.available
       : form.quantity
 
-  /* ── Files ──────────────────────────────────────────── */
   function addFiles(newFiles: ServiceFile[]) {
-    setForm((f) => ({ ...f, files: [...f.files, ...newFiles] }))
+    setFormState((f) => ({ ...f, files: [...f.files, ...newFiles] }))
   }
   function removeFile(id: string) {
-    setForm((f) => ({ ...f, files: f.files.filter((x) => x.id !== id) }))
+    setFormState((f) => ({ ...f, files: f.files.filter((x) => x.id !== id) }))
   }
 
-  /* ── Submit ─────────────────────────────────────────── */
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: { preventDefault(): void }) {
     e.preventDefault()
-    if (!form.productId)         { setError("Select a product."); return }
-    if (!form.service)           { setError("Select a service type."); return }
-    if (effectiveQuantity <= 0)  { setError("Enter a quantity greater than 0."); return }
+    if (!form.productId)        { setError("Select a product."); return }
+    if (!form.service)          { setError("Select a service type."); return }
+    if (effectiveQuantity <= 0) { setError("Enter a quantity greater than 0."); return }
     setError("")
-    onSave({ ...form, quantity: effectiveQuantity })
+    setSaveError("")
+    setSaving(true)
+    try {
+      await onSave({ ...form, quantity: effectiveQuantity })
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save request.")
+    } finally {
+      setSaving(false)
+    }
   }
 
-  /* ── Readonly for clients editing non-New requests ── */
-  const canEdit = isAdmin || !isEdit || request?.status === "New"
+  const canEdit         = isAdmin || !isEdit || request?.status === "New"
+  const showClientField = isAdmin && !isEdit && clients.length > 0
 
   return (
     <Modal
@@ -290,14 +307,22 @@ export function RequestModal({ isOpen, onClose, onSave, request }: RequestModalP
         <div className="flex items-center justify-between">
           <p className="text-[12px] text-red-600">{error}</p>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={onClose}
-              className="px-4 py-2 text-[13px] font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="px-4 py-2 text-[13px] font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+            >
               Cancel
             </button>
             {canEdit && (
-              <button form="request-form" type="submit"
-                className="px-4 py-2 text-[13px] font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors">
-                {isEdit ? "Save Changes" : "Submit Request"}
+              <button
+                form="request-form"
+                type="submit"
+                disabled={saving}
+                className="px-4 py-2 text-[13px] font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-60"
+              >
+                {saving ? "Saving…" : isEdit ? "Save Changes" : "Submit Request"}
               </button>
             )}
           </div>
@@ -306,12 +331,33 @@ export function RequestModal({ isOpen, onClose, onSave, request }: RequestModalP
     >
       <form id="request-form" onSubmit={handleSubmit} className="space-y-5">
 
-        {/* Admin: status */}
+        {/* Admin: client selector when creating (Supabase mode) */}
+        {showClientField && (
+          <div className="p-4 rounded-lg bg-gray-50 border border-gray-200">
+            <label className={labelClass}>Client <span className="text-red-500">*</span></label>
+            <select
+              required
+              value={form.clientId}
+              onChange={(e) => set("clientId", e.target.value)}
+              className="px-3 py-2 text-[13px] border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="" disabled>Select a client…</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Admin: status (edit only) */}
         {isAdmin && isEdit && (
           <div className="p-4 rounded-lg bg-gray-50 border border-gray-200">
             <label className={labelClass}>Status</label>
-            <select value={form.status} onChange={(e) => set("status", e.target.value as ServiceStatus)}
-              className="px-3 py-2 text-[13px] border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <select
+              value={form.status}
+              onChange={(e) => set("status", e.target.value as ServiceStatus)}
+              className="px-3 py-2 text-[13px] border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
               {SERVICE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
@@ -320,9 +366,12 @@ export function RequestModal({ isOpen, onClose, onSave, request }: RequestModalP
         {/* Product */}
         <div>
           <label className={labelClass}>Product <span className="text-red-500">*</span></label>
-          <select value={form.productId}
+          <select
+            value={form.productId}
             onChange={(e) => set("productId", e.target.value)}
-            className={inputClass} disabled={!canEdit}>
+            className={inputClass}
+            disabled={!canEdit}
+          >
             <option value="">Select product…</option>
             {activeProducts.map((p) => (
               <option key={p.id} value={p.id}>{p.name} ({p.sku})</option>
@@ -344,7 +393,8 @@ export function RequestModal({ isOpen, onClose, onSave, request }: RequestModalP
           <label className={labelClass}>Quantity <span className="text-red-500">*</span></label>
           <div className="flex items-center gap-3 flex-wrap">
             <input
-              type="number" min="1"
+              type="number"
+              min="1"
               value={effectiveQuantity || ""}
               onChange={(e) => { set("quantity", Number(e.target.value)); set("useAllAvailable", false) }}
               placeholder="0"
@@ -369,9 +419,12 @@ export function RequestModal({ isOpen, onClose, onSave, request }: RequestModalP
         {/* Service */}
         <div>
           <label className={labelClass}>Service Type <span className="text-red-500">*</span></label>
-          <select value={form.service}
+          <select
+            value={form.service}
             onChange={(e) => set("service", e.target.value as ServiceType | "")}
-            className={inputClass} disabled={!canEdit}>
+            className={inputClass}
+            disabled={!canEdit}
+          >
             <option value="">Select service…</option>
             {SERVICE_TYPES.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
@@ -405,9 +458,23 @@ export function RequestModal({ isOpen, onClose, onSave, request }: RequestModalP
         {/* Notes */}
         <div>
           <label className={labelClass}>Notes</label>
-          <textarea rows={2} value={form.notes} onChange={(e) => set("notes", e.target.value)}
-            placeholder="Optional notes…" className={textareaClass} disabled={!canEdit} />
+          <textarea
+            rows={2}
+            value={form.notes}
+            onChange={(e) => set("notes", e.target.value)}
+            placeholder="Optional notes…"
+            className={textareaClass}
+            disabled={!canEdit}
+          />
         </div>
+
+        {/* Save error */}
+        {saveError && (
+          <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5">
+            <AlertCircle className="size-3.5 text-red-500 mt-0.5 shrink-0" />
+            <p className="text-[12px] text-red-600 leading-snug">{saveError}</p>
+          </div>
+        )}
 
       </form>
     </Modal>

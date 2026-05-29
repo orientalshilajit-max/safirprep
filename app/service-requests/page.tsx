@@ -1,12 +1,15 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import {
   Search, SlidersHorizontal, Plus, Pencil, Archive,
   FileText, CheckCircle, AlertTriangle, Clock, List,
   ChevronLeft, ChevronRight,
 } from "lucide-react"
-import { useRole, useRequests, useProducts, useInvoices, useFiles, useClients } from "@/components/layout/app-shell"
+import {
+  useRole, useRequests, useProducts, useInvoices,
+  useFiles, useClients, useIsMockMode,
+} from "@/components/layout/app-shell"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { IconButton } from "@/components/ui/icon-button"
@@ -15,21 +18,20 @@ import { StatCard } from "@/components/ui/stat-card"
 import { ConfirmModal } from "@/components/ui/confirm-modal"
 import { RequestModal, type RequestFormData } from "@/components/service-requests/request-modal"
 import { SERVICE_TYPES } from "@/lib/types"
+import {
+  createRequest,
+  updateRequest,
+  archiveRequest,
+} from "@/app/service-requests/actions"
+import { listProductClients } from "@/app/products/actions"
 import type { ServiceRequest, ServiceStatus, ServiceType, DataTableColumn, FileCategory, Invoice } from "@/lib/types"
 
 const PAGE_SIZE = 8
 
-/* Unit prices used when auto-generating an invoice on "Invoiced" status */
 const SERVICE_UNIT_PRICES: Record<string, number> = {
-  "FBA Prep": 0.85,
-  "FBM Fulfillment": 0.65,
-  "Labeling": 0.45,
-  "Bundling": 1.20,
-  "Inspection": 1.50,
-  "Forwarding": 0.75,
-  "Storage": 22.00,
-  "Returns": 2.00,
-  "Other": 1.00,
+  "FBA Prep": 0.85, "FBM Fulfillment": 0.65, "Labeling": 0.45,
+  "Bundling": 1.20, "Inspection": 1.50, "Forwarding": 0.75,
+  "Storage": 22.00, "Returns": 2.00, "Other": 1.00,
 }
 
 function fileCategory(service: string): FileCategory {
@@ -38,29 +40,39 @@ function fileCategory(service: string): FileCategory {
 }
 
 const OPEN_STATUSES: ServiceStatus[] = ["New"]
+void OPEN_STATUSES // used only by mock archive logic below
 
 export default function ServiceRequestsPage() {
-  const { role } = useRole()
+  const { role }    = useRole()
+  const isMockMode  = useIsMockMode()
   const { requests, setRequests } = useRequests()
-  const { products, setProducts } = useProducts()
+  const { setProducts } = useProducts()
   const { invoices, setInvoices } = useInvoices()
-  const { setFiles } = useFiles()
-  const { clients } = useClients()
+  const { setFiles }              = useFiles()
+  const { clients }               = useClients()
 
-  const [search, setSearch] = useState("")
-  const [statusFilter, setStatusFilter] = useState<ServiceStatus | "all">("all")
+  const [search,        setSearch]        = useState("")
+  const [statusFilter,  setStatusFilter]  = useState<ServiceStatus | "all">("all")
   const [serviceFilter, setServiceFilter] = useState<ServiceType | "all">("all")
-  const [page, setPage] = useState(1)
-  const [modalOpen, setModalOpen] = useState(false)
-  const [editing, setEditing] = useState<ServiceRequest | null>(null)
+  const [page,          setPage]          = useState(1)
+  const [modalOpen,     setModalOpen]     = useState(false)
+  const [editing,       setEditing]       = useState<ServiceRequest | null>(null)
   const [archiveTarget, setArchiveTarget] = useState<ServiceRequest | null>(null)
+
+  // Client list for admin's modal selector (Supabase mode only)
+  const [pageClients, setPageClients] = useState<{ id: string; name: string }[]>([])
+  useEffect(() => {
+    if (!isMockMode && role === "admin") {
+      listProductClients().then(setPageClients).catch(() => {})
+    }
+  }, [isMockMode, role])
 
   /* ── Stat counts ─────────────────────────────────────── */
   const active = requests.filter((r) => !r.isArchived)
   const counts = {
-    Open: active.filter((r) => r.status === "New").length,
-    "In Progress": active.filter((r) => r.status === "In Progress").length,
-    Completed: active.filter((r) => r.status === "Completed").length,
+    Open:             active.filter((r) => r.status === "New").length,
+    "In Progress":    active.filter((r) => r.status === "In Progress").length,
+    Completed:        active.filter((r) => r.status === "Completed").length,
     "Need Attention": active.filter((r) => r.status === "Need Attention").length,
   }
 
@@ -74,200 +86,252 @@ export default function ServiceRequestsPage() {
         r.productName.toLowerCase().includes(q) ||
         r.clientName.toLowerCase().includes(q) ||
         r.service.toLowerCase().includes(q)
-      const matchStatus =
-        statusFilter === "all" || r.status === statusFilter
-      const matchService =
-        serviceFilter === "all" || r.service === serviceFilter
+      const matchStatus  = statusFilter  === "all" || r.status  === statusFilter
+      const matchService = serviceFilter === "all" || r.service === serviceFilter
       return matchSearch && matchStatus && matchService
     })
   }, [active, search, statusFilter, serviceFilter])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const safePage = Math.min(page, totalPages)
-  const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  const safePage   = Math.min(page, totalPages)
+  const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
-  /* ── Actions ─────────────────────────────────────────── */
-  function openCreate() {
-    setEditing(null)
-    setModalOpen(true)
-  }
+  /* ── Helpers ─────────────────────────────────────────── */
+  function openCreate() { setEditing(null);  setModalOpen(true) }
+  function openEdit(r: ServiceRequest) { setEditing(r); setModalOpen(true) }
 
-  function openEdit(r: ServiceRequest) {
-    setEditing(r)
-    setModalOpen(true)
-  }
-
-  /* ── File sync helper ───────────────────────────────── */
-  function syncFilesToContext(req: { id: string; requestNumber: string; clientId: string; clientName: string; service: string; createdAt: string }, formFiles: RequestFormData["files"]) {
+  // Sync files to mock Files context (mock-only; not connected to Supabase yet)
+  function syncFilesToContext(
+    req: { id: string; requestNumber: string; clientId: string; clientName: string; service: string; createdAt: string },
+    formFiles: RequestFormData["files"]
+  ) {
     if (!formFiles.length) return
     setFiles((prev) => {
-      const existingNames = new Set(
+      const existing = new Set(
         prev.filter((f) => f.relatedType === "service-request" && f.relatedId === req.id).map((f) => f.name)
       )
       const newDocs = formFiles
-        .filter((sf) => !existingNames.has(sf.name))
+        .filter((sf) => !existing.has(sf.name))
         .map((sf) => ({
-          id: `fd-req-${sf.id}`,
-          name: sf.name,
-          ext: sf.name.split(".").pop()?.toLowerCase() ?? "bin",
-          size: sf.size,
-          category: fileCategory(req.service),
-          relatedTo: req.requestNumber,
+          id:          `fd-req-${sf.id}`,
+          name:        sf.name,
+          ext:         sf.name.split(".").pop()?.toLowerCase() ?? "bin",
+          size:        sf.size,
+          category:    fileCategory(req.service),
+          relatedTo:   req.requestNumber,
           relatedType: "service-request" as const,
-          relatedId: req.id,
-          clientId: req.clientId,
-          clientName: req.clientName,
-          uploadedBy: req.clientName,
-          uploadedAt: req.createdAt,
+          relatedId:   req.id,
+          clientId:    req.clientId,
+          clientName:  req.clientName,
+          uploadedBy:  req.clientName,
+          uploadedAt:  req.createdAt,
         }))
       return newDocs.length ? [...newDocs, ...prev] : prev
     })
   }
 
-  function handleSave(form: RequestFormData) {
-    const today = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+  /* ── Save handler ────────────────────────────────────── */
+  async function handleSave(form: RequestFormData) {
+    const today = new Date().toLocaleDateString("en-US", {
+      month: "short", day: "numeric", year: "numeric",
+    })
 
-    if (editing) {
-      const oldStatus = editing.status
-      const newStatus = form.status
-      const productName = requests.find((x) => x.id === editing.id)?.productName ?? editing.productName
+    // ── Mock mode: keep original logic unchanged ───────────
+    if (isMockMode) {
+      if (editing) {
+        const oldStatus  = editing.status
+        const newStatus  = form.status
+        const productName = requests.find((x) => x.id === editing.id)?.productName ?? editing.productName
 
-      setRequests((prev) =>
-        prev.map((r) =>
-          r.id === editing.id
-            ? {
-                ...r,
-                productId: form.productId,
-                productName,
-                quantity: form.quantity,
-                service: form.service as ServiceType,
-                status: newStatus,
-                files: form.files,
-                notes: form.notes,
-                serviceDetails: {
-                  prepNotes: form.prepNotes,
-                  orderNotes: form.orderNotes,
-                  placementNotes: form.placementNotes,
-                  bundleInstructions: form.bundleInstructions,
-                  unitsPerBundle: form.unitsPerBundle,
-                  serviceDescription: form.serviceDescription,
-                },
-              }
-            : r
-        )
-      )
-
-      // Restore inventory if admin cancels a New request
-      if (role === "admin" && newStatus === "Cancelled" && oldStatus === "New" && editing.inventoryDeducted) {
-        setProducts((prev) =>
-          prev.map((p) =>
-            p.id === editing.productId ? { ...p, available: p.available + editing.quantity } : p
+        setRequests((prev) =>
+          prev.map((r) =>
+            r.id === editing.id
+              ? {
+                  ...r,
+                  productId: form.productId,
+                  productName,
+                  quantity:  form.quantity,
+                  service:   form.service as ServiceType,
+                  status:    newStatus,
+                  files:     form.files,
+                  notes:     form.notes,
+                  serviceDetails: {
+                    prepNotes:          form.prepNotes,
+                    orderNotes:         form.orderNotes,
+                    placementNotes:     form.placementNotes,
+                    bundleInstructions: form.bundleInstructions,
+                    unitsPerBundle:     form.unitsPerBundle,
+                    serviceDescription: form.serviceDescription,
+                  },
+                }
+              : r
           )
         )
-      }
 
-      // Auto-generate invoice when admin marks request as Invoiced (once only)
-      const alreadyHasInvoice = invoices.some((inv) => inv.relatedRequestNumber === editing.requestNumber)
-      if (role === "admin" && newStatus === "Invoiced" && oldStatus !== "Invoiced" && !alreadyHasInvoice) {
-        const client = clients.find((c) => c.id === editing.clientId)
-        const allNums = invoices.map((i) => parseInt(i.invoiceNumber.replace("INV-", "")) || 0)
-        const nextInvNum = Math.max(...allNums, 41) + 1
-        const dueDate = new Date(Date.now() + 14 * 86_400_000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-        const unitPrice = SERVICE_UNIT_PRICES[form.service] ?? 1.00
-
-        const newInvoice: Invoice = {
-          id: `inv-${Date.now()}`,
-          invoiceNumber: `INV-${nextInvNum.toString().padStart(4, "0")}`,
-          clientId: editing.clientId,
-          clientName: editing.clientName,
-          clientEmail: client?.email ?? "",
-          clientAddress: client?.phone ?? "",
-          date: today,
-          dueDate,
-          status: "Unpaid",
-          lineItems: [
-            {
-              id: `li-${Date.now()}`,
-              description: `${form.service} – ${productName} (${form.quantity} units)`,
-              quantity: form.quantity,
-              unitPrice,
-            },
-          ],
-          notes: "",
-          relatedRequestNumber: editing.requestNumber,
+        if (role === "admin" && newStatus === "Cancelled" && oldStatus === "New" && editing.inventoryDeducted) {
+          setProducts((prev) =>
+            prev.map((p) => p.id === editing.productId ? { ...p, available: p.available + editing.quantity } : p)
+          )
         }
-        setInvoices((prev) => [newInvoice, ...prev])
+
+        // Auto-generate invoice on Invoiced status (mock only)
+        const alreadyHasInvoice = invoices.some((inv) => inv.relatedRequestNumber === editing.requestNumber)
+        if (role === "admin" && newStatus === "Invoiced" && oldStatus !== "Invoiced" && !alreadyHasInvoice) {
+          const client    = clients.find((c) => c.id === editing.clientId)
+          const allNums   = invoices.map((i) => parseInt(i.invoiceNumber.replace("INV-", "")) || 0)
+          const nextNum   = Math.max(...allNums, 41) + 1
+          const dueDate   = new Date(Date.now() + 14 * 86_400_000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+          const unitPrice = SERVICE_UNIT_PRICES[form.service] ?? 1.00
+          const newInvoice: Invoice = {
+            id:             `inv-${Date.now()}`,
+            invoiceNumber:  `INV-${nextNum.toString().padStart(4, "0")}`,
+            clientId:       editing.clientId,
+            clientName:     editing.clientName,
+            clientEmail:    client?.email ?? "",
+            clientAddress:  client?.phone ?? "",
+            date:           today,
+            dueDate,
+            status:         "Unpaid",
+            lineItems:      [{ id: `li-${Date.now()}`, description: `${form.service} – ${productName} (${form.quantity} units)`, quantity: form.quantity, unitPrice }],
+            notes:          "",
+            relatedRequestNumber: editing.requestNumber,
+          }
+          setInvoices((prev) => [newInvoice, ...prev])
+        }
+
+        syncFilesToContext(
+          { id: editing.id, requestNumber: editing.requestNumber, clientId: editing.clientId, clientName: editing.clientName, service: form.service, createdAt: editing.createdAt },
+          form.files
+        )
+      } else {
+        const allNums   = requests.map((r) => parseInt(r.requestNumber.replace("REQ-", "")) || 0)
+        const nextNum   = Math.max(...allNums, 2005) + 1
+        const newReq: ServiceRequest = {
+          id:            `r${Date.now()}`,
+          requestNumber: `REQ-${nextNum}`,
+          clientId:      "c1",
+          clientName:    "TechVault Co.",
+          productId:     form.productId,
+          productName:   "",
+          productSku:    "",
+          service:       form.service as ServiceType,
+          quantity:      form.quantity,
+          status:        "New",
+          files:         form.files,
+          notes:         form.notes,
+          serviceDetails: {
+            prepNotes: form.prepNotes, orderNotes: form.orderNotes,
+            placementNotes: form.placementNotes, bundleInstructions: form.bundleInstructions,
+            unitsPerBundle: form.unitsPerBundle, serviceDescription: form.serviceDescription,
+          },
+          createdAt:         today,
+          inventoryDeducted: true,
+        }
+        setProducts((prev) => {
+          const p = prev.find((x) => x.id === form.productId)
+          if (p) {
+            newReq.productName = p.name
+            newReq.productSku  = p.sku
+            return prev.map((x) => x.id === form.productId ? { ...x, available: Math.max(0, x.available - form.quantity) } : x)
+          }
+          return prev
+        })
+        setRequests((prev) => [newReq, ...prev])
+        syncFilesToContext(
+          { id: newReq.id, requestNumber: newReq.requestNumber, clientId: newReq.clientId, clientName: newReq.clientName, service: form.service, createdAt: today },
+          form.files
+        )
       }
 
-      // Sync any newly-attached files to Files & Documents
-      syncFilesToContext(
-        { id: editing.id, requestNumber: editing.requestNumber, clientId: editing.clientId, clientName: editing.clientName, service: form.service, createdAt: editing.createdAt },
-        form.files
-      )
-    } else {
-      // Create new request
-      const allNums = requests.map((r) => parseInt(r.requestNumber.replace("REQ-", "")) || 0)
-      const nextNum = Math.max(...allNums, 2005) + 1
-      const clientName = "TechVault Co."
+      setModalOpen(false)
+      return
+    }
 
-      const newReq: ServiceRequest = {
-        id: `r${Date.now()}`,
-        requestNumber: `REQ-${nextNum}`,
-        clientId: "c1",
-        clientName,
-        productId: form.productId,
-        productName: "",
-        productSku: "",
-        service: form.service as ServiceType,
-        quantity: form.quantity,
-        status: "New",
-        files: form.files,
-        notes: form.notes,
+    // ── Supabase mode ──────────────────────────────────────
+    if (editing) {
+      const updated = await updateRequest(editing.id, {
+        productId:      form.productId,
+        quantity:       form.quantity,
+        service:        form.service as ServiceType,
+        status:         form.status,
+        notes:          form.notes,
         serviceDetails: {
-          prepNotes: form.prepNotes,
-          orderNotes: form.orderNotes,
-          placementNotes: form.placementNotes,
+          prepNotes:          form.prepNotes,
+          orderNotes:         form.orderNotes,
+          placementNotes:     form.placementNotes,
           bundleInstructions: form.bundleInstructions,
-          unitsPerBundle: form.unitsPerBundle,
+          unitsPerBundle:     form.unitsPerBundle,
           serviceDescription: form.serviceDescription,
         },
-        createdAt: today,
-        inventoryDeducted: true,
-      }
-
-      setProducts((prev) => {
-        const p = prev.find((x) => x.id === form.productId)
-        if (p) {
-          newReq.productName = p.name
-          newReq.productSku = p.sku
-          return prev.map((x) =>
-            x.id === form.productId ? { ...x, available: Math.max(0, x.available - form.quantity) } : x
-          )
-        }
-        return prev
       })
 
-      setRequests((prev) => [newReq, ...prev])
+      setRequests((prev) => prev.map((r) => r.id === editing.id ? updated : r))
 
-      // Sync attached files immediately
-      syncFilesToContext(
-        { id: newReq.id, requestNumber: newReq.requestNumber, clientId: newReq.clientId, clientName: newReq.clientName, service: form.service, createdAt: today },
-        form.files
-      )
+      // Mirror inventory change in products context for immediate UI feedback
+      const becomingCancelled = form.status === "Cancelled" && editing.status !== "Cancelled"
+      if (editing.inventoryDeducted) {
+        if (becomingCancelled) {
+          setProducts((prev) => prev.map((p) => p.id === editing.productId
+            ? { ...p, available: p.available + editing.quantity } : p))
+        } else if (form.status !== "Cancelled") {
+          if (editing.productId !== form.productId) {
+            setProducts((prev) => prev.map((p) => {
+              if (p.id === editing.productId) return { ...p, available: p.available + editing.quantity }
+              if (p.id === form.productId)    return { ...p, available: Math.max(0, p.available - form.quantity) }
+              return p
+            }))
+          } else if (editing.quantity !== form.quantity) {
+            const delta = editing.quantity - form.quantity
+            setProducts((prev) => prev.map((p) => p.id === form.productId
+              ? { ...p, available: Math.max(0, p.available + delta) } : p))
+          }
+        }
+      }
+    } else {
+      const created = await createRequest({
+        clientId:  form.clientId || undefined,
+        productId: form.productId,
+        quantity:  form.quantity,
+        service:   form.service as ServiceType,
+        notes:     form.notes,
+        serviceDetails: {
+          prepNotes:          form.prepNotes,
+          orderNotes:         form.orderNotes,
+          placementNotes:     form.placementNotes,
+          bundleInstructions: form.bundleInstructions,
+          unitsPerBundle:     form.unitsPerBundle,
+          serviceDescription: form.serviceDescription,
+        },
+      })
+
+      setRequests((prev) => [created, ...prev])
+      setProducts((prev) => prev.map((p) => p.id === form.productId
+        ? { ...p, available: Math.max(0, p.available - form.quantity) } : p))
     }
 
     setModalOpen(false)
   }
 
-  function handleArchive(r: ServiceRequest) {
-    setRequests((prev) => prev.map((x) => (x.id === r.id ? { ...x, isArchived: true } : x)))
-    // Restore inventory for New requests
-    if (r.status === "New" && r.inventoryDeducted) {
-      setProducts((prev) =>
-        prev.map((p) =>
-          p.id === r.productId ? { ...p, available: p.available + r.quantity } : p
-        )
-      )
+  /* ── Archive handler ─────────────────────────────────── */
+  async function handleArchive(r: ServiceRequest) {
+    if (isMockMode) {
+      setRequests((prev) => prev.map((x) => (x.id === r.id ? { ...x, isArchived: true } : x)))
+      if (r.status === "New" && r.inventoryDeducted) {
+        setProducts((prev) => prev.map((p) => p.id === r.productId ? { ...p, available: p.available + r.quantity } : p))
+      }
+      setArchiveTarget(null)
+      return
+    }
+
+    try {
+      await archiveRequest(r.id)
+      setRequests((prev) => prev.filter((x) => x.id !== r.id))
+      // Restore inventory locally if request was still "New"
+      if (r.status === "New" && r.inventoryDeducted) {
+        setProducts((prev) => prev.map((p) => p.id === r.productId ? { ...p, available: p.available + r.quantity } : p))
+      }
+    } catch (err) {
+      console.error("[ServiceRequestsPage] archiveRequest failed:", err)
     }
     setArchiveTarget(null)
   }
@@ -283,9 +347,7 @@ export default function ServiceRequestsPage() {
       id: "number",
       header: "Request #",
       cell: (row) => (
-        <span className="font-mono text-[12px] font-semibold text-gray-700">
-          {row.requestNumber}
-        </span>
+        <span className="font-mono text-[12px] font-semibold text-gray-700">{row.requestNumber}</span>
       ),
     },
     {
@@ -293,9 +355,7 @@ export default function ServiceRequestsPage() {
       header: "Product",
       cell: (row) => (
         <div className="min-w-0">
-          <p className="text-[13px] font-medium text-gray-900 truncate max-w-[180px]">
-            {row.productName}
-          </p>
+          <p className="text-[13px] font-medium text-gray-900 truncate max-w-[180px]">{row.productName}</p>
           <p className="font-mono text-[11px] text-gray-400">{row.productSku}</p>
         </div>
       ),
@@ -303,9 +363,7 @@ export default function ServiceRequestsPage() {
     {
       id: "service",
       header: "Service",
-      cell: (row) => (
-        <span className="text-[12px] text-gray-700">{row.service}</span>
-      ),
+      cell: (row) => <span className="text-[12px] text-gray-700">{row.service}</span>,
     },
     {
       id: "quantity",
@@ -334,18 +392,14 @@ export default function ServiceRequestsPage() {
         ) : (
           <div className="flex items-center justify-center gap-1">
             <FileText className="size-3.5 text-gray-400" />
-            <span className="text-[12px] font-semibold text-gray-600">
-              {row.files.length}
-            </span>
+            <span className="text-[12px] font-semibold text-gray-600">{row.files.length}</span>
           </div>
         ),
     },
     {
       id: "created",
       header: "Created",
-      cell: (row) => (
-        <span className="text-[12px] text-gray-500">{row.createdAt}</span>
-      ),
+      cell: (row) => <span className="text-[12px] text-gray-500">{row.createdAt}</span>,
     },
     {
       id: "actions",
@@ -361,11 +415,7 @@ export default function ServiceRequestsPage() {
                 <Pencil className="size-3.5" />
               </IconButton>
             )}
-            <IconButton
-              variant="danger"
-              onClick={() => setArchiveTarget(row)}
-              title="Archive"
-            >
+            <IconButton variant="danger" onClick={() => setArchiveTarget(row)} title="Archive">
               <Archive className="size-3.5" />
             </IconButton>
           </div>
@@ -378,9 +428,7 @@ export default function ServiceRequestsPage() {
     id: "client",
     header: "Client",
     cell: (row) => (
-      <span className="text-[12px] text-gray-500 max-w-[120px] truncate block">
-        {row.clientName}
-      </span>
+      <span className="text-[12px] text-gray-500 max-w-[120px] truncate block">{row.clientName}</span>
     ),
   }
 
@@ -395,12 +443,8 @@ export default function ServiceRequestsPage() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-[20px] font-bold text-gray-900 leading-tight">
-            Service Requests
-          </h1>
-          <p className="text-[13px] text-gray-400 mt-0.5">
-            Manage your prep and value-add requests
-          </p>
+          <h1 className="text-[20px] font-bold text-gray-900 leading-tight">Service Requests</h1>
+          <p className="text-[13px] text-gray-400 mt-0.5">Manage your prep and value-add requests</p>
         </div>
         <button
           onClick={openCreate}
@@ -413,38 +457,10 @@ export default function ServiceRequestsPage() {
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard
-          label="Open"
-          value={counts.Open}
-          icon={List}
-          iconClass="bg-blue-50 text-blue-600"
-          active={statusFilter === "New"}
-          onClick={() => handleStatClick("New")}
-        />
-        <StatCard
-          label="In Progress"
-          value={counts["In Progress"]}
-          icon={Clock}
-          iconClass="bg-orange-50 text-orange-600"
-          active={statusFilter === "In Progress"}
-          onClick={() => handleStatClick("In Progress")}
-        />
-        <StatCard
-          label="Completed"
-          value={counts.Completed}
-          icon={CheckCircle}
-          iconClass="bg-green-50 text-green-600"
-          active={statusFilter === "Completed"}
-          onClick={() => handleStatClick("Completed")}
-        />
-        <StatCard
-          label="Need Attention"
-          value={counts["Need Attention"]}
-          icon={AlertTriangle}
-          iconClass="bg-red-50 text-red-500"
-          active={statusFilter === "Need Attention"}
-          onClick={() => handleStatClick("Need Attention")}
-        />
+        <StatCard label="Open"          value={counts.Open}             icon={List}          iconClass="bg-blue-50 text-blue-600"   active={statusFilter === "New"}           onClick={() => handleStatClick("New")} />
+        <StatCard label="In Progress"   value={counts["In Progress"]}   icon={Clock}         iconClass="bg-orange-50 text-orange-600" active={statusFilter === "In Progress"}   onClick={() => handleStatClick("In Progress")} />
+        <StatCard label="Completed"     value={counts.Completed}        icon={CheckCircle}   iconClass="bg-green-50 text-green-600"  active={statusFilter === "Completed"}     onClick={() => handleStatClick("Completed")} />
+        <StatCard label="Need Attention" value={counts["Need Attention"]} icon={AlertTriangle} iconClass="bg-red-50 text-red-500"     active={statusFilter === "Need Attention"} onClick={() => handleStatClick("Need Attention")} />
       </div>
 
       {/* Table card */}
@@ -537,11 +553,8 @@ export default function ServiceRequestsPage() {
             requests
           </p>
           <div className="flex items-center gap-1">
-            <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={safePage === 1}
-              className="flex size-7 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
+            <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage === 1}
+              className="flex size-7 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
               <ChevronLeft className="size-3.5" />
             </button>
             {Array.from({ length: totalPages }, (_, i) => i + 1)
@@ -555,24 +568,16 @@ export default function ServiceRequestsPage() {
                 n === "…" ? (
                   <span key={`e${i}`} className="px-1 text-[12px] text-gray-400">…</span>
                 ) : (
-                  <button
-                    key={n}
-                    onClick={() => setPage(n as number)}
+                  <button key={n} onClick={() => setPage(n as number)}
                     className={`flex size-7 items-center justify-center rounded-md text-[12px] font-medium transition-colors ${
-                      safePage === n
-                        ? "bg-blue-600 text-white"
-                        : "border border-gray-200 text-gray-600 hover:bg-gray-100"
-                    }`}
-                  >
+                      safePage === n ? "bg-blue-600 text-white" : "border border-gray-200 text-gray-600 hover:bg-gray-100"
+                    }`}>
                     {n}
                   </button>
                 )
               )}
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={safePage === totalPages}
-              className="flex size-7 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
+            <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage === totalPages}
+              className="flex size-7 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
               <ChevronRight className="size-3.5" />
             </button>
           </div>
@@ -585,6 +590,7 @@ export default function ServiceRequestsPage() {
         onClose={() => setModalOpen(false)}
         onSave={handleSave}
         request={editing}
+        clients={!isMockMode ? pageClients : undefined}
       />
 
       {/* Archive confirm */}

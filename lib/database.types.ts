@@ -330,6 +330,8 @@ export type Database = {
           service_type: string
           status: Database["public"]["Enums"]["service_status"]
           notes: string | null
+          inventory_deducted: boolean
+          service_details: Json | null
           created_at: string
           updated_at: string
           deleted_at: string | null
@@ -341,6 +343,8 @@ export type Database = {
           service_type: string
           status?: Database["public"]["Enums"]["service_status"]
           notes?: string | null
+          inventory_deducted?: boolean
+          service_details?: Json | null
           created_at?: string
           updated_at?: string
           deleted_at?: string | null
@@ -352,6 +356,8 @@ export type Database = {
           service_type?: string
           status?: Database["public"]["Enums"]["service_status"]
           notes?: string | null
+          inventory_deducted?: boolean
+          service_details?: Json | null
           created_at?: string
           updated_at?: string
           deleted_at?: string | null
