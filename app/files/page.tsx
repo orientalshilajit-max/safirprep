@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import {
   Search,
   Plus,
@@ -15,13 +15,22 @@ import {
   ChevronLeft,
   ChevronRight,
 } from "lucide-react"
-import { useRole, useFiles, useProducts, useShipments, useRequests } from "@/components/layout/app-shell"
+import {
+  useRole,
+  useFiles,
+  useProducts,
+  useShipments,
+  useRequests,
+  useAuthUser,
+  useIsMockMode,
+} from "@/components/layout/app-shell"
 import { DataTable } from "@/components/ui/data-table"
 import { StatCard } from "@/components/ui/stat-card"
 import { EmptyState } from "@/components/ui/empty-state"
 import { IconButton } from "@/components/ui/icon-button"
 import { FilePreviewModal } from "@/components/files/file-preview-modal"
 import { UploadModal } from "@/components/files/upload-modal"
+import { listProductClients } from "@/app/products/actions"
 import type { FileDoc, FileCategory, DataTableColumn } from "@/lib/types"
 import { FILE_CATEGORIES } from "@/lib/types"
 
@@ -49,7 +58,7 @@ function FileThumbnail({ file, onClick }: { file: FileDoc; onClick: () => void }
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
-          src={`https://via.placeholder.com/36x36/e2e8f0/94a3b8?text=${file.ext.toUpperCase()}`}
+          src={file.fileUrl ?? `https://via.placeholder.com/36x36/e2e8f0/94a3b8?text=${file.ext.toUpperCase()}`}
           alt={file.name}
           className="w-full h-full object-cover"
         />
@@ -58,11 +67,11 @@ function FileThumbnail({ file, onClick }: { file: FileDoc; onClick: () => void }
   }
 
   const configs = {
-    pdf: { bg: "bg-red-50", border: "border-red-100", color: "text-red-500", Icon: FileText },
-    word: { bg: "bg-blue-50", border: "border-blue-100", color: "text-blue-600", Icon: FileText },
-    excel: { bg: "bg-green-50", border: "border-green-100", color: "text-green-600", Icon: FileText },
-    archive: { bg: "bg-amber-50", border: "border-amber-100", color: "text-amber-500", Icon: Archive },
-    unknown: { bg: "bg-gray-100", border: "border-gray-200", color: "text-gray-400", Icon: File },
+    pdf:     { bg: "bg-red-50",   border: "border-red-100",   color: "text-red-500",   Icon: FileText },
+    word:    { bg: "bg-blue-50",  border: "border-blue-100",  color: "text-blue-600",  Icon: FileText },
+    excel:   { bg: "bg-green-50", border: "border-green-100", color: "text-green-600", Icon: FileText },
+    archive: { bg: "bg-amber-50", border: "border-amber-100", color: "text-amber-500", Icon: Archive  },
+    unknown: { bg: "bg-gray-100", border: "border-gray-200",  color: "text-gray-400",  Icon: File     },
   } as const
 
   const { bg, border, color, Icon } = configs[kind]
@@ -81,11 +90,11 @@ function FileThumbnail({ file, onClick }: { file: FileDoc; onClick: () => void }
 function ExtBadge({ ext }: { ext: string }) {
   const kind = getFileKind(ext)
   const styles = {
-    pdf: "bg-red-50 text-red-600 border-red-100",
-    word: "bg-blue-50 text-blue-600 border-blue-100",
-    excel: "bg-green-50 text-green-600 border-green-100",
+    pdf:     "bg-red-50 text-red-600 border-red-100",
+    word:    "bg-blue-50 text-blue-600 border-blue-100",
+    excel:   "bg-green-50 text-green-600 border-green-100",
     archive: "bg-amber-50 text-amber-600 border-amber-100",
-    image: "bg-purple-50 text-purple-600 border-purple-100",
+    image:   "bg-purple-50 text-purple-600 border-purple-100",
     unknown: "bg-gray-100 text-gray-500 border-gray-200",
   }
   return (
@@ -95,31 +104,59 @@ function ExtBadge({ ext }: { ext: string }) {
   )
 }
 
+function handleDownload(file: FileDoc) {
+  if (file.fileUrl) {
+    const a = document.createElement("a")
+    a.href = file.fileUrl
+    a.download = file.name
+    a.target = "_blank"
+    a.rel = "noopener noreferrer"
+    a.click()
+  }
+}
+
 export default function FilesPage() {
-  const { role } = useRole()
+  const { role }   = useRole()
+  const authUser   = useAuthUser()
+  const isMockMode = useIsMockMode()
   const { files, setFiles } = useFiles()
-  const { products } = useProducts()
+  const { products }  = useProducts()
   const { shipments } = useShipments()
-  const { requests } = useRequests()
+  const { requests }  = useRequests()
 
-  const [search, setSearch] = useState("")
-  const [categoryFilter, setCategoryFilter] = useState<FileCategory | "all">("all")
-  const [page, setPage] = useState(1)
-  const [previewFile, setPreviewFile] = useState<FileDoc | null>(null)
-  const [uploadOpen, setUploadOpen] = useState(false)
+  const [search,          setSearch]          = useState("")
+  const [categoryFilter,  setCategoryFilter]  = useState<FileCategory | "all">("all")
+  const [page,            setPage]            = useState(1)
+  const [previewFile,     setPreviewFile]     = useState<FileDoc | null>(null)
+  const [uploadOpen,      setUploadOpen]      = useState(false)
 
-  /* ── Visible files by role ──────────────────────────── */
-  const visibleFiles = role === "admin" ? files : files.filter((f) => f.clientId === "c1")
+  // Client list for admin UploadModal (Supabase mode only)
+  const [pageClients, setPageClients] = useState<{ id: string; name: string }[]>([])
+  useEffect(() => {
+    if (!isMockMode && role === "admin") {
+      listProductClients().then(setPageClients).catch(() => {})
+    }
+  }, [isMockMode, role])
 
-  /* ── Stat counts ────────────────────────────────────── */
+  /* ── Visible files by role ──────────────────────────────
+     In Supabase mode, DB RLS already scopes the result.
+     In mock mode, manually filter by clientId.            */
+  const visibleFiles = useMemo(() => {
+    if (!isMockMode) return files
+    if (role === "admin") return files
+    const myClientId = authUser?.clientId ?? "c1"
+    return files.filter((f) => f.clientId === myClientId)
+  }, [files, role, isMockMode, authUser])
+
+  /* ── Stat counts ──────────────────────────────────────── */
   const counts = {
-    total: visibleFiles.length,
-    labels: visibleFiles.filter((f) => f.category === "Labels").length,
+    total:        visibleFiles.length,
+    labels:       visibleFiles.filter((f) => f.category === "Labels").length,
     shipmentDocs: visibleFiles.filter((f) => f.category === "Shipment Docs").length,
-    invoices: visibleFiles.filter((f) => f.category === "Invoices").length,
+    invoices:     visibleFiles.filter((f) => f.category === "Invoices").length,
   }
 
-  /* ── Filtered + paginated ───────────────────────────── */
+  /* ── Filtered + paginated ─────────────────────────────── */
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
     return visibleFiles.filter((f) => {
@@ -136,30 +173,35 @@ export default function FilesPage() {
   }, [visibleFiles, search, categoryFilter])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const safePage = Math.min(page, totalPages)
-  const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  const safePage   = Math.min(page, totalPages)
+  const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
-  /* ── Upload ─────────────────────────────────────────── */
+  /* ── Upload ───────────────────────────────────────────── */
   function handleUpload(doc: FileDoc) {
     setFiles((prev) => [doc, ...prev])
   }
 
-  /* ── Stat filter toggle ─────────────────────────────── */
+  /* ── Stat filter toggle ───────────────────────────────── */
   function handleStatClick(cat: FileCategory) {
     setCategoryFilter((prev) => (prev === cat ? "all" : cat))
     setPage(1)
   }
 
-  /* ── Columns ────────────────────────────────────────── */
+  /* ── Upload modal props ───────────────────────────────── */
+  // In mock mode, use the hardcoded mock client.
+  // In Supabase mode, use the authenticated user's clientId (clients use theirs;
+  // admin picks from the dropdown rendered inside UploadModal).
+  const uploadClientId   = isMockMode ? "c1"            : (authUser?.clientId ?? "")
+  const uploadClientName = isMockMode ? "TechVault Co." : (authUser?.displayName ?? "")
+
+  /* ── Columns ──────────────────────────────────────────── */
   const baseColumns: DataTableColumn<FileDoc>[] = [
     {
       id: "preview",
       header: "Preview",
       headerClassName: "w-14",
       className: "w-14",
-      cell: (row) => (
-        <FileThumbnail file={row} onClick={() => setPreviewFile(row)} />
-      ),
+      cell: (row) => <FileThumbnail file={row} onClick={() => setPreviewFile(row)} />,
     },
     {
       id: "name",
@@ -209,7 +251,12 @@ export default function FilesPage() {
       className: "text-right w-16",
       cell: (row) => (
         <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-          <IconButton variant="primary" title="Download" onClick={() => {}}>
+          <IconButton
+            variant="primary"
+            title="Download"
+            onClick={() => handleDownload(row)}
+            // Disable if no URL (mock mode file with no real URL)
+          >
             <Download className="size-3.5" />
           </IconButton>
         </div>
@@ -247,7 +294,7 @@ export default function FilesPage() {
         ]
       : baseColumns
 
-  /* ── Render ─────────────────────────────────────────── */
+  /* ── Render ───────────────────────────────────────────── */
   return (
     <div className="flex flex-col gap-4 h-full">
       {/* Header */}
@@ -430,9 +477,11 @@ export default function FilesPage() {
         products={products}
         shipments={shipments}
         requests={requests}
-        clientId="c1"
-        clientName={role === "admin" ? "Safir WMS" : "TechVault Co."}
+        clientId={uploadClientId}
+        clientName={uploadClientName}
         role={role}
+        clients={!isMockMode ? pageClients : undefined}
+        isMockMode={isMockMode}
       />
     </div>
   )

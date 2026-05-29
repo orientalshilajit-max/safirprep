@@ -120,7 +120,7 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
             <div className="flex items-center justify-center p-6 bg-gray-50 min-h-[280px]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={`https://via.placeholder.com/480x320/e2e8f0/94a3b8?text=${encodeURIComponent(file.name)}`}
+                src={file.fileUrl ?? `https://via.placeholder.com/480x320/e2e8f0/94a3b8?text=${encodeURIComponent(file.name)}`}
                 alt={file.name}
                 className="max-w-full max-h-[320px] rounded-lg border border-gray-200 shadow-sm object-contain"
               />
@@ -156,7 +156,17 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
             </div>
           </div>
           <button
-            onClick={onClose}
+            onClick={() => {
+              if (file.fileUrl) {
+                const a = document.createElement("a")
+                a.href = file.fileUrl
+                a.download = file.name
+                a.target = "_blank"
+                a.rel = "noopener noreferrer"
+                a.click()
+              }
+              onClose()
+            }}
             className="flex w-full items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors"
           >
             <Download className="size-3.5" />

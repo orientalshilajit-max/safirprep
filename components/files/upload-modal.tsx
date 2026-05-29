@@ -1,11 +1,12 @@
 "use client"
 
 import { useState, useRef } from "react"
-import { Upload, X } from "lucide-react"
+import { Upload, X, AlertCircle } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import { FILE_CATEGORIES } from "@/lib/types"
 import type { FileCategory, FileDoc } from "@/lib/types"
 import type { Product, Shipment, ServiceRequest } from "@/lib/types"
+import { uploadFile } from "@/app/files/actions"
 
 type UploadFormData = {
   file: File | null
@@ -19,13 +20,19 @@ type UploadFormData = {
 type UploadModalProps = {
   isOpen: boolean
   onClose: () => void
-  onUpload: (doc: FileDoc) => void
+  /** May return a Promise; modal shows loading state while it resolves. */
+  onUpload: (doc: FileDoc) => void | Promise<void>
   products: Product[]
   shipments: Shipment[]
   requests: ServiceRequest[]
+  /** The uploading user's client ID. Passed through to the server action. */
   clientId: string
   clientName: string
   role: "admin" | "client"
+  /** Admin-only: list of clients for the "assign to client" selector. */
+  clients?: { id: string; name: string }[]
+  /** Supabase mode flag. In mock mode the upload is local-only. */
+  isMockMode?: boolean
 }
 
 function formatBytes(bytes: number): string {
@@ -65,6 +72,8 @@ export function UploadModal({
   clientId,
   clientName,
   role,
+  clients = [],
+  isMockMode = true,
 }: UploadModalProps) {
   const [form, setForm] = useState<UploadFormData>({
     file: null,
@@ -74,12 +83,19 @@ export function UploadModal({
     relatedRequestId: "",
     notes: "",
   })
-  const [dragOver, setDragOver] = useState(false)
+  // Admin client selector (Supabase mode only)
+  const [selectedClientId,   setSelectedClientId]   = useState(clientId || (clients[0]?.id ?? ""))
+  const [dragOver,  setDragOver]  = useState(false)
+  const [saving,    setSaving]    = useState(false)
+  const [saveError, setSaveError] = useState("")
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   function reset() {
     setForm({ file: null, category: "Other", relatedProductId: "", relatedShipmentId: "", relatedRequestId: "", notes: "" })
+    setSelectedClientId(clientId || (clients[0]?.id ?? ""))
     setDragOver(false)
+    setSaveError("")
+    setSaving(false)
   }
 
   function handleClose() {
@@ -98,35 +114,69 @@ export function UploadModal({
     if (f) handleFile(f)
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: { preventDefault(): void }) {
     e.preventDefault()
     if (!form.file) return
+    setSaveError("")
+    setSaving(true)
 
-    const ext = form.file.name.split(".").pop()?.toLowerCase() ?? "bin"
-    const related = getRelatedLabel(form, products, shipments, requests)
-    const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+    try {
+      if (!isMockMode) {
+        // ── Supabase mode: upload to Storage + save DB record ──
+        const resolvedClientId = (role === "admin" && clients.length > 0)
+          ? selectedClientId
+          : clientId
 
-    const doc: FileDoc = {
-      id: `fd${Date.now()}`,
-      name: form.file.name,
-      ext,
-      size: formatBytes(form.file.size),
-      category: form.category,
-      ...related,
-      clientId,
-      clientName,
-      uploadedBy: role === "admin" ? "Safir WMS" : clientName,
-      uploadedAt: now,
-      notes: form.notes || undefined,
+        if (!resolvedClientId) {
+          throw new Error(role === "admin" ? "Select a client before uploading." : "Client ID not found.")
+        }
+
+        const fd = new FormData()
+        fd.append("file",       form.file)
+        fd.append("clientId",   resolvedClientId)
+        fd.append("category",   form.category)
+        fd.append("uploadedBy", role === "admin" ? "Safir WMS" : clientName)
+        if (form.relatedProductId)  fd.append("productId",  form.relatedProductId)
+        if (form.relatedShipmentId) fd.append("shipmentId", form.relatedShipmentId)
+        if (form.relatedRequestId)  fd.append("requestId",  form.relatedRequestId)
+
+        const doc = await uploadFile(fd)
+        await onUpload(doc)
+      } else {
+        // ── Mock mode: build local FileDoc (original behaviour) ──
+        const ext     = form.file.name.split(".").pop()?.toLowerCase() ?? "bin"
+        const related = getRelatedLabel(form, products, shipments, requests)
+        const now     = new Date().toLocaleDateString("en-US", {
+          month: "short", day: "numeric", year: "numeric",
+        })
+
+        const doc: FileDoc = {
+          id:          `fd${Date.now()}`,
+          name:        form.file.name,
+          ext,
+          size:        formatBytes(form.file.size),
+          category:    form.category,
+          ...related,
+          clientId,
+          clientName,
+          uploadedBy:  role === "admin" ? "Safir WMS" : clientName,
+          uploadedAt:  now,
+          notes:       form.notes || undefined,
+        }
+        await onUpload(doc)
+      }
+
+      handleClose()
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Upload failed.")
+      setSaving(false)
     }
-
-    onUpload(doc)
-    handleClose()
   }
 
-  const visibleProducts = role === "admin" ? products : products.filter((p) => p.clientId === clientId)
-  const visibleShipments = role === "admin" ? shipments : shipments.filter((s) => s.clientId === clientId)
-  const visibleRequests = role === "admin" ? requests : requests.filter((r) => r.clientId === clientId)
+  const visibleProducts  = role === "admin" ? products  : products.filter((p) => p.clientId  === clientId)
+  const visibleShipments = role === "admin" ? shipments : shipments.filter((s) => s.clientId  === clientId)
+  const visibleRequests  = role === "admin" ? requests  : requests.filter((r) => r.clientId   === clientId)
+  const showClientField  = role === "admin" && !isMockMode && clients.length > 0
 
   return (
     <Modal
@@ -139,23 +189,44 @@ export function UploadModal({
           <button
             type="button"
             onClick={handleClose}
-            className="px-4 py-2 text-[13px] font-medium text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+            disabled={saving}
+            className="px-4 py-2 text-[13px] font-medium text-gray-600 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             type="submit"
             form="upload-form"
-            disabled={!form.file}
+            disabled={!form.file || saving}
             className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-[13px] font-semibold rounded-lg hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
           >
             <Upload className="size-3.5" />
-            Upload
+            {saving ? "Uploading…" : "Upload"}
           </button>
         </div>
       }
     >
       <form id="upload-form" onSubmit={handleSubmit} className="space-y-4">
+        {/* Admin client selector (Supabase mode only) */}
+        {showClientField && (
+          <div>
+            <label className="block text-[12px] font-semibold text-gray-700 mb-1.5">
+              Client <span className="text-red-500">*</span>
+            </label>
+            <select
+              required
+              value={selectedClientId}
+              onChange={(e) => setSelectedClientId(e.target.value)}
+              className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-800"
+            >
+              <option value="" disabled>Select a client…</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {/* Drop zone */}
         <div
           onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
@@ -271,6 +342,14 @@ export function UploadModal({
             className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 resize-none"
           />
         </div>
+
+        {/* Upload error */}
+        {saveError && (
+          <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5">
+            <AlertCircle className="size-3.5 text-red-500 mt-0.5 shrink-0" />
+            <p className="text-[12px] text-red-600 leading-snug">{saveError}</p>
+          </div>
+        )}
       </form>
     </Modal>
   )

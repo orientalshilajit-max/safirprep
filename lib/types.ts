@@ -208,6 +208,8 @@ export type FileDoc = {
   uploadedBy: string
   uploadedAt: string
   notes?: string
+  /** Public URL for download/preview. Populated in Supabase mode only. */
+  fileUrl?: string
 }
 
 export type DataTableColumn<T> = {

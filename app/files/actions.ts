@@ -1,0 +1,227 @@
+"use server"
+
+// ============================================================
+// Safir WMS – Files Server Actions
+//
+// STORAGE SETUP (one-time, via Supabase dashboard):
+//   1. Create a storage bucket named "files".
+//   2. Set the bucket to PUBLIC (or configure per-object signed-URL
+//      policies). Public is simplest; DB RLS is the primary
+//      access-control layer since file URLs contain UUIDs.
+//   3. No storage RLS policies are required when using the
+//      service-role key for uploads (it bypasses storage auth).
+// ============================================================
+
+import { createSupabaseServerClient } from "@/lib/supabase-server"
+import { createServerAdminClient }     from "@/lib/supabase"
+import type { FileDoc, FileCategory } from "@/lib/types"
+
+// ── Category mapping ──────────────────────────────────────────
+
+const CATEGORY_FROM_DB: Record<string, FileCategory> = {
+  agreements:    "Agreements",
+  labels:        "Labels",
+  shipment_docs: "Shipment Docs",
+  product_docs:  "Product Docs",
+  invoices:      "Invoices",
+  other:         "Other",
+}
+
+const CATEGORY_TO_DB: Record<FileCategory, string> = {
+  "Agreements":    "agreements",
+  "Labels":        "labels",
+  "Shipment Docs": "shipment_docs",
+  "Product Docs":  "product_docs",
+  "Invoices":      "invoices",
+  "Other":         "other",
+}
+
+const STORAGE_BUCKET = "files"
+
+// ── Helpers ───────────────────────────────────────────────────
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024)           return `${bytes} B`
+  if (bytes < 1024 * 1024)    return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+// ── Row type ──────────────────────────────────────────────────
+
+type DbFileRow = {
+  id:             string
+  client_id:      string
+  product_id:     string | null
+  shipment_id:    string | null
+  request_id:     string | null
+  invoice_id:     string | null
+  category:       string
+  file_name:      string
+  file_url:       string
+  thumbnail_url:  string | null
+  file_type:      string | null
+  file_size_bytes: number | null
+  uploaded_by:    string | null
+  created_at:     string
+  clients:               { company_name: string } | null
+  products:              { name: string }         | null
+  incoming_shipments:    { shipment_number: string } | null
+  service_requests:      { request_number: string }  | null
+}
+
+function mapRow(row: DbFileRow): FileDoc {
+  const ext = row.file_name.split(".").pop()?.toLowerCase() ?? "bin"
+
+  let relatedTo:   string                = "General"
+  let relatedType: FileDoc["relatedType"] = "general"
+  let relatedId:   string                = ""
+
+  if (row.product_id) {
+    relatedTo   = row.products?.name ?? row.product_id
+    relatedType = "product"
+    relatedId   = row.product_id
+  } else if (row.shipment_id) {
+    relatedTo   = row.incoming_shipments?.shipment_number ?? row.shipment_id
+    relatedType = "shipment"
+    relatedId   = row.shipment_id
+  } else if (row.request_id) {
+    relatedTo   = row.service_requests?.request_number ?? row.request_id
+    relatedType = "service-request"
+    relatedId   = row.request_id
+  }
+
+  return {
+    id:          row.id,
+    name:        row.file_name,
+    ext,
+    size:        row.file_size_bytes ? formatBytes(row.file_size_bytes) : "—",
+    category:    CATEGORY_FROM_DB[row.category] ?? "Other",
+    relatedTo,
+    relatedType,
+    relatedId,
+    clientId:    row.client_id,
+    clientName:  row.clients?.company_name ?? "",
+    uploadedBy:  row.uploaded_by ?? "",
+    uploadedAt:  new Date(row.created_at).toLocaleDateString("en-US", {
+      month: "short", day: "numeric", year: "numeric",
+    }),
+    fileUrl: row.file_url,
+  }
+}
+
+const FILE_SELECT = `
+  id, client_id, product_id, shipment_id, request_id, invoice_id,
+  category, file_name, file_url, thumbnail_url,
+  file_type, file_size_bytes, uploaded_by, created_at,
+  clients (company_name),
+  products (name),
+  incoming_shipments (shipment_number),
+  service_requests (request_number)
+` as const
+
+// ── listFiles ─────────────────────────────────────────────────
+
+export async function listFiles(): Promise<FileDoc[]> {
+  const supabase = await createSupabaseServerClient()
+  const { data, error } = await supabase
+    .from("files")
+    .select(FILE_SELECT)
+    .is("deleted_at", null)
+    .order("created_at", { ascending: false })
+  if (error) throw new Error(error.message)
+  return (data ?? []).map((r) => mapRow(r as unknown as DbFileRow))
+}
+
+// ── uploadFile ────────────────────────────────────────────────
+// Accepts a FormData payload from the client.
+//
+// FormData fields:
+//   file           – the File object
+//   clientId       – target client UUID (admin supplies; clients from JWT)
+//   category       – FileCategory label (app string, e.g. "Labels")
+//   productId      – optional related product UUID
+//   shipmentId     – optional related shipment UUID
+//   requestId      – optional related service request UUID
+//   uploadedBy     – display name of the uploader
+//
+// Upload flow:
+//   1. Validate auth / derive clientId
+//   2. Upload binary to Supabase Storage with service-role key
+//      (bypasses storage RLS; DB RLS is the access gate)
+//   3. Insert record into files table with user session client
+//      (DB RLS enforces client-owns-client_id rule)
+
+export async function uploadFile(formData: FormData): Promise<FileDoc> {
+  const supabase      = await createSupabaseServerClient()
+  const supabaseAdmin = createServerAdminClient()
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error("Unauthorized")
+  const isAdmin = user.app_metadata?.role === "admin"
+
+  // Resolve clientId: admin picks one; client uses their JWT claim
+  const formClientId = (formData.get("clientId") as string | null)?.trim() ?? ""
+  const clientId = isAdmin
+    ? formClientId
+    : (user.app_metadata?.client_id as string | undefined) ?? ""
+
+  if (!clientId) {
+    throw new Error(isAdmin ? "Select a client before uploading." : "Client ID not found in session.")
+  }
+
+  const file = formData.get("file") as File | null
+  if (!file || file.size === 0) throw new Error("No file selected.")
+
+  const category    = (formData.get("category")   as FileCategory) ?? "Other"
+  const productId   = (formData.get("productId")  as string | null) || null
+  const shipmentId  = (formData.get("shipmentId") as string | null) || null
+  const requestId   = (formData.get("requestId")  as string | null) || null
+  const uploadedBy  = (formData.get("uploadedBy") as string | null) ?? ""
+
+  // Build a unique storage path so filenames never collide
+  const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_")
+  const storagePath  = `${clientId}/${crypto.randomUUID()}-${safeFileName}`
+
+  // Upload to Supabase Storage (service-role bypasses bucket RLS)
+  const { error: storageErr } = await supabaseAdmin.storage
+    .from(STORAGE_BUCKET)
+    .upload(storagePath, file, { contentType: file.type, upsert: false })
+  if (storageErr) throw new Error(`Storage upload failed: ${storageErr.message}`)
+
+  // Retrieve the public URL for the uploaded file
+  const { data: { publicUrl } } = supabaseAdmin.storage
+    .from(STORAGE_BUCKET)
+    .getPublicUrl(storagePath)
+
+  // Insert file record — user client respects DB RLS
+  const { data: record, error: dbErr } = await supabase
+    .from("files")
+    .insert({
+      client_id:       clientId,
+      product_id:      productId,
+      shipment_id:     shipmentId,
+      request_id:      requestId,
+      category:        (CATEGORY_TO_DB[category] ?? "other") as "agreements" | "labels" | "shipment_docs" | "product_docs" | "invoices" | "other",
+      file_name:       file.name,
+      file_url:        publicUrl,
+      file_type:       file.type || null,
+      file_size_bytes: file.size,
+      uploaded_by:     uploadedBy || null,
+    })
+    .select("id")
+    .single()
+  if (dbErr) {
+    // Best-effort cleanup of orphaned storage object
+    await supabaseAdmin.storage.from(STORAGE_BUCKET).remove([storagePath])
+    throw new Error(dbErr.message)
+  }
+
+  // Fetch the full row to return
+  const { data: full, error: fErr } = await supabase
+    .from("files")
+    .select(FILE_SELECT)
+    .eq("id", record.id)
+    .single()
+  if (fErr) throw new Error(fErr.message)
+  return mapRow(full as unknown as DbFileRow)
+}
