@@ -1,11 +1,11 @@
 "use client"
 
 import { useState } from "react"
-import { Upload } from "lucide-react"
+import { Upload, AlertCircle } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import type { Product, ProductStatus, UserRole } from "@/lib/types"
 
-type FormData = {
+export type ProductFormData = {
   name: string
   sku: string
   asin: string
@@ -16,9 +16,11 @@ type FormData = {
   available: number
   incoming: number
   damaged: number
+  /** Populated only for admin creating a new product (Supabase mode). */
+  clientId?: string
 }
 
-const empty: FormData = {
+const empty: ProductFormData = {
   name: "",
   sku: "",
   asin: "",
@@ -34,10 +36,13 @@ const empty: FormData = {
 type ProductModalProps = {
   isOpen: boolean
   onClose: () => void
-  onSave: (data: FormData) => void
+  /** May return a Promise — modal shows a loading state while it resolves. */
+  onSave: (data: ProductFormData) => void | Promise<void>
   product?: Product | null
   role: UserRole
   zIndex?: number
+  /** Admin-only: list of clients for the "assign to client" selector. */
+  clients?: { id: string; name: string }[]
 }
 
 export function ProductModal({
@@ -47,14 +52,19 @@ export function ProductModal({
   product,
   role,
   zIndex,
+  clients = [],
 }: ProductModalProps) {
-  const [form, setForm] = useState<FormData>(empty)
+  const [form, setForm] = useState<ProductFormData>(empty)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+
   // Track the (isOpen, product) pair we last initialised the form for.
   const [prevKey, setPrevKey] = useState<string>("")
   const currentKey = `${isOpen}|${product?.id ?? "__new__"}`
 
   if (prevKey !== currentKey) {
     setPrevKey(currentKey)
+    setSaveError(null)
     if (product) {
       setForm({
         name: product.name,
@@ -69,21 +79,35 @@ export function ProductModal({
         damaged: product.damaged,
       })
     } else {
-      setForm(empty)
+      setForm({
+        ...empty,
+        // Pre-select first client when admin is creating
+        clientId: role === "admin" && clients.length > 0 ? clients[0].id : undefined,
+      })
     }
   }
 
-  function set<K extends keyof FormData>(key: K, value: FormData[K]) {
+  function set<K extends keyof ProductFormData>(key: K, value: ProductFormData[K]) {
     setForm((f) => ({ ...f, [key]: value }))
   }
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: { preventDefault(): void }) {
     e.preventDefault()
     if (!form.name.trim() || !form.sku.trim()) return
-    onSave(form)
+    setSaving(true)
+    setSaveError(null)
+    try {
+      await onSave(form)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save product.")
+    } finally {
+      setSaving(false)
+    }
   }
 
   const isEdit = !!product
+  const showClientSelector =
+    role === "admin" && !isEdit && clients.length > 0
 
   return (
     <Modal
@@ -97,16 +121,18 @@ export function ProductModal({
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-[13px] font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+            disabled={saving}
+            className="px-4 py-2 text-[13px] font-medium text-gray-600 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
           >
             Cancel
           </button>
           <button
             form="product-form"
             type="submit"
-            className="px-4 py-2 text-[13px] font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+            disabled={saving}
+            className="px-4 py-2 text-[13px] font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-60"
           >
-            {isEdit ? "Save Changes" : "Add Product"}
+            {saving ? "Saving…" : isEdit ? "Save Changes" : "Add Product"}
           </button>
         </div>
       }
@@ -225,34 +251,73 @@ export function ProductModal({
           />
         </div>
 
-        {/* Admin-only inventory */}
+        {/* Admin-only section */}
         {role === "admin" && (
-          <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-4">
-            <p className="text-[11px] font-bold text-blue-600 uppercase tracking-wide mb-3">
-              Inventory — Admin Only
+          <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-4 space-y-3">
+            <p className="text-[11px] font-bold text-blue-600 uppercase tracking-wide">
+              Admin Only
             </p>
-            <div className="grid grid-cols-3 gap-3">
-              {(
-                [
-                  { key: "available", label: "Available" },
-                  { key: "incoming", label: "Incoming" },
-                  { key: "damaged", label: "Damaged" },
-                ] as { key: "available" | "incoming" | "damaged"; label: string }[]
-              ).map(({ key, label }) => (
-                <div key={key}>
-                  <label className="block text-[12px] font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
-                    {label}
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    value={form[key]}
-                    onChange={(e) => set(key, Number(e.target.value))}
-                    className="w-full px-3 py-2 text-[13px] border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
-                  />
-                </div>
-              ))}
+
+            {/* Client selector — only when creating a new product */}
+            {showClientSelector && (
+              <div>
+                <label className="block text-[12px] font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
+                  Client <span className="text-red-500">*</span>
+                </label>
+                <select
+                  required
+                  value={form.clientId ?? ""}
+                  onChange={(e) => set("clientId", e.target.value)}
+                  className="w-full px-3 py-2 text-[13px] border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
+                >
+                  <option value="" disabled>
+                    Select a client…
+                  </option>
+                  {clients.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Inventory counts */}
+            <div>
+              <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                Inventory
+              </p>
+              <div className="grid grid-cols-3 gap-3">
+                {(
+                  [
+                    { key: "available", label: "Available" },
+                    { key: "incoming", label: "Incoming" },
+                    { key: "damaged", label: "Damaged" },
+                  ] as { key: "available" | "incoming" | "damaged"; label: string }[]
+                ).map(({ key, label }) => (
+                  <div key={key}>
+                    <label className="block text-[12px] font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
+                      {label}
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={form[key]}
+                      onChange={(e) => set(key, Number(e.target.value))}
+                      className="w-full px-3 py-2 text-[13px] border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
+          </div>
+        )}
+
+        {/* Save error */}
+        {saveError && (
+          <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5">
+            <AlertCircle className="size-3.5 text-red-500 mt-0.5 shrink-0" />
+            <p className="text-[12px] text-red-600 leading-snug">{saveError}</p>
           </div>
         )}
       </form>

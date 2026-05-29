@@ -1,14 +1,21 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useEffect } from "react"
 import { Search, SlidersHorizontal, Plus, Pencil, Archive, ChevronLeft, ChevronRight } from "lucide-react"
-import { useRole, useProducts } from "@/components/layout/app-shell"
+import { useRole, useProducts, useIsMockMode } from "@/components/layout/app-shell"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { IconButton } from "@/components/ui/icon-button"
 import { ProductThumbnail } from "@/components/ui/product-thumbnail"
 import { EmptyState } from "@/components/ui/empty-state"
 import { ProductModal } from "@/components/products/product-modal"
+import type { ProductFormData } from "@/components/products/product-modal"
+import {
+  createProduct,
+  updateProduct,
+  toggleProductArchive,
+  listProductClients,
+} from "@/app/products/actions"
 import type { Product, DataTableColumn } from "@/lib/types"
 
 const PAGE_SIZE = 8
@@ -16,11 +23,24 @@ const PAGE_SIZE = 8
 export default function ProductsPage() {
   const { role } = useRole()
   const { products, setProducts } = useProducts()
+  const isMockMode = useIsMockMode()
+
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<"all" | "Active" | "Archived">("all")
   const [page, setPage] = useState(1)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Product | null>(null)
+
+  // Client list for admin product-creation (Supabase mode only)
+  const [pageClients, setPageClients] = useState<{ id: string; name: string }[]>([])
+
+  useEffect(() => {
+    if (!isMockMode && role === "admin") {
+      listProductClients()
+        .then(setPageClients)
+        .catch(() => {/* non-critical — admin can still save without selector */})
+    }
+  }, [isMockMode, role])
 
   /* ── Derived state ───────────────────────────────────── */
   const filtered = useMemo(() => {
@@ -53,30 +73,52 @@ export default function ProductsPage() {
     setModalOpen(true)
   }
 
-  function handleSave(data: Parameters<React.ComponentProps<typeof ProductModal>["onSave"]>[0]) {
-    if (editing) {
-      setProducts((ps) =>
-        ps.map((p) => (p.id === editing.id ? { ...p, ...data } : p))
-      )
-    } else {
-      const next: Product = {
-        id: `p${Date.now()}`,
-        clientId: "c1",
-        clientName: "TechVault Co.",
-        ...data,
+  async function handleSave(data: ProductFormData) {
+    if (isMockMode) {
+      // Mock mode: update local state only
+      if (editing) {
+        setProducts((ps) =>
+          ps.map((p) => (p.id === editing.id ? { ...p, ...data } : p))
+        )
+      } else {
+        const next: Product = {
+          id: `p${Date.now()}`,
+          clientId: "c1",
+          clientName: "TechVault Co.",
+          ...data,
+        }
+        setProducts((ps) => [next, ...ps])
       }
-      setProducts((ps) => [next, ...ps])
+      setModalOpen(false)
+      return
+    }
+
+    // Supabase mode: call server action, update context with returned record
+    if (editing) {
+      const updated = await updateProduct(editing.id, data)
+      setProducts((ps) => ps.map((p) => (p.id === editing.id ? updated : p)))
+    } else {
+      const created = await createProduct(data)
+      setProducts((ps) => [created, ...ps])
     }
     setModalOpen(false)
   }
 
-  function handleArchive(id: string) {
-    setProducts((ps) =>
-      ps.map((p) =>
-        p.id === id
-          ? { ...p, status: p.status === "Archived" ? "Active" : "Archived" }
-          : p
+  async function handleArchive(id: string) {
+    if (isMockMode) {
+      setProducts((ps) =>
+        ps.map((p) =>
+          p.id === id
+            ? { ...p, status: p.status === "Archived" ? "Active" : "Archived" }
+            : p
+        )
       )
+      return
+    }
+
+    const newStatus = await toggleProductArchive(id)
+    setProducts((ps) =>
+      ps.map((p) => (p.id === id ? { ...p, status: newStatus } : p))
     )
   }
 
@@ -336,6 +378,7 @@ export default function ProductsPage() {
         onSave={handleSave}
         product={editing}
         role={role}
+        clients={!isMockMode ? pageClients : undefined}
       />
     </div>
   )

@@ -13,6 +13,7 @@ import { mockRequests } from "@/lib/mock-requests"
 import { mockFiles } from "@/lib/mock-files"
 import { mockInvoices } from "@/lib/mock-invoices"
 import { mockClients } from "@/lib/mock-clients"
+import { listProducts } from "@/app/products/actions"
 
 // ── Context type ──────────────────────────────────────────────
 
@@ -112,8 +113,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // Role: sourced from JWT in auth mode, from toggle in mock mode
   const [role, setRole] = useState<UserRole>("client")
 
-  // ── Mock data state ─────────────────────────────────────────
-  const [products,  setProducts]  = useState<Product[]>(mockProducts)
+  // ── Data state ───────────────────────────────────────────────
+  // In mock mode: pre-populated with mock data.
+  // In Supabase mode: starts empty; filled after auth resolves.
+  const [products,  setProducts]  = useState<Product[]>(isMockMode ? mockProducts : [])
   const [shipments, setShipments] = useState<Shipment[]>(mockShipments)
   const [requests,  setRequests]  = useState<ServiceRequest[]>(mockRequests)
   const [files,     setFiles]     = useState<FileDoc[]>(mockFiles)
@@ -127,11 +130,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     const supabase = createBrowserClient()
 
     // Prime with the current session (avoids flash of wrong role)
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
       if (user) {
         const shaped = shapeUser(user)
         setAuthUser(shaped)
         setRole(shaped.role)
+        // Load real products; keep spinner until data is ready to avoid
+        // a flash of the empty-state table.
+        try {
+          const data = await listProducts()
+          setProducts(data)
+        } catch {
+          // Leave products empty; the page will show its empty state.
+        }
       }
       setAuthLoading(false)
     })
