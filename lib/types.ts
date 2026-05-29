@@ -7,6 +7,37 @@ export type ShipmentStatus =
   | "Partially Received"
   | "Need Attention"
 
+export type ServiceStatus =
+  | "New"
+  | "In Progress"
+  | "Completed"
+  | "Need Attention"
+  | "Invoiced"
+  | "Cancelled"
+
+export type ServiceType =
+  | "FBA Prep"
+  | "FBM Fulfillment"
+  | "Labeling"
+  | "Bundling"
+  | "Inspection"
+  | "Forwarding"
+  | "Storage"
+  | "Returns"
+  | "Other"
+
+export const SERVICE_TYPES: ServiceType[] = [
+  "FBA Prep",
+  "FBM Fulfillment",
+  "Labeling",
+  "Bundling",
+  "Inspection",
+  "Forwarding",
+  "Storage",
+  "Returns",
+  "Other",
+]
+
 export const CARRIERS = [
   "UPS",
   "FedEx",
@@ -68,6 +99,41 @@ export type Shipment = {
   notes: string
   isArchived?: boolean
   isInventoryUpdated?: boolean
+}
+
+export type ServiceFile = {
+  id: string
+  name: string
+  type: string
+  size: string
+}
+
+export type ServiceDetails = {
+  prepNotes?: string
+  orderNotes?: string
+  placementNotes?: string
+  bundleInstructions?: string
+  unitsPerBundle?: number
+  serviceDescription?: string
+}
+
+export type ServiceRequest = {
+  id: string
+  requestNumber: string
+  clientId: string
+  clientName: string
+  productId: string
+  productName: string
+  productSku: string
+  service: ServiceType
+  quantity: number
+  status: ServiceStatus
+  files: ServiceFile[]
+  notes: string
+  serviceDetails: ServiceDetails
+  createdAt: string
+  isArchived?: boolean
+  inventoryDeducted?: boolean
 }
 
 export type DataTableColumn<T> = {

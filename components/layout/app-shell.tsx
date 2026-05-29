@@ -3,9 +3,10 @@
 import { createContext, useContext, useState } from "react"
 import { Sidebar } from "./sidebar"
 import { Header } from "./header"
-import type { UserRole, Product, Shipment } from "@/lib/types"
+import type { UserRole, Product, Shipment, ServiceRequest } from "@/lib/types"
 import { mockProducts } from "@/lib/mock-data"
 import { mockShipments } from "@/lib/mock-shipments"
+import { mockRequests } from "@/lib/mock-requests"
 
 type AppContextType = {
   role: UserRole
@@ -14,6 +15,8 @@ type AppContextType = {
   setProducts: React.Dispatch<React.SetStateAction<Product[]>>
   shipments: Shipment[]
   setShipments: React.Dispatch<React.SetStateAction<Shipment[]>>
+  requests: ServiceRequest[]
+  setRequests: React.Dispatch<React.SetStateAction<ServiceRequest[]>>
 }
 
 const AppContext = createContext<AppContextType>({
@@ -23,6 +26,8 @@ const AppContext = createContext<AppContextType>({
   setProducts: () => {},
   shipments: [],
   setShipments: () => {},
+  requests: [],
+  setRequests: () => {},
 })
 
 export function useRole() {
@@ -40,13 +45,19 @@ export function useShipments() {
   return { shipments, setShipments }
 }
 
+export function useRequests() {
+  const { requests, setRequests } = useContext(AppContext)
+  return { requests, setRequests }
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [role, setRole] = useState<UserRole>("client")
   const [products, setProducts] = useState<Product[]>(mockProducts)
   const [shipments, setShipments] = useState<Shipment[]>(mockShipments)
+  const [requests, setRequests] = useState<ServiceRequest[]>(mockRequests)
 
   return (
-    <AppContext.Provider value={{ role, setRole, products, setProducts, shipments, setShipments }}>
+    <AppContext.Provider value={{ role, setRole, products, setProducts, shipments, setShipments, requests, setRequests }}>
       <div className="flex h-screen bg-slate-50 overflow-hidden">
         <Sidebar role={role} />
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
