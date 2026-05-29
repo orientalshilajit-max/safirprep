@@ -1,12 +1,12 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useParams, useRouter } from "next/navigation"
-import { ArrowLeft, Plus, X, Save } from "lucide-react"
-import { useRole, useProducts, useShipments } from "@/components/layout/app-shell"
+import { ArrowLeft, Plus, X, Save, Paperclip, FileText, File, Archive } from "lucide-react"
+import { useRole, useProducts, useShipments, useFiles } from "@/components/layout/app-shell"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { CARRIERS } from "@/lib/types"
-import type { Shipment, ShipmentProduct, ShipmentTracking, ShipmentStatus } from "@/lib/types"
+import type { Shipment, ShipmentProduct, ShipmentTracking, ShipmentStatus, FileDoc } from "@/lib/types"
 
 const STATUSES: ShipmentStatus[] = [
   "In Transit",
@@ -27,6 +27,8 @@ export default function EditShipmentPage() {
   const { products } = useProducts()
   const { shipments, setShipments } = useShipments()
   const { setProducts } = useProducts()
+  const { files, setFiles } = useFiles()
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const shipment = shipments.find((s) => s.id === params.id)
 
@@ -127,6 +129,50 @@ export default function EditShipmentPage() {
     setTimeout(() => {
       router.push("/shipments")
     }, 300)
+  }
+
+  /* ── Shipment files (from Files context) ─────────────── */
+  const shipmentFiles = files.filter(
+    (f) => f.relatedType === "shipment" && f.relatedId === params.id
+  )
+
+  function handleAttachFile() {
+    fileInputRef.current?.click()
+  }
+
+  function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file || !shipment) return
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "bin"
+    const sizeFmt =
+      file.size < 1024 * 1024
+        ? `${Math.round(file.size / 1024)} KB`
+        : `${(file.size / 1024 / 1024).toFixed(1)} MB`
+    const newDoc: FileDoc = {
+      id: `fd-ship-${Date.now()}`,
+      name: file.name,
+      ext,
+      size: sizeFmt,
+      category: "Shipment Docs",
+      relatedTo: shipment.shipmentNumber,
+      relatedType: "shipment",
+      relatedId: shipment.id,
+      clientId: shipment.clientId,
+      clientName: shipment.clientName,
+      uploadedBy: role === "admin" ? "Safir WMS" : shipment.clientName,
+      uploadedAt: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+    }
+    setFiles((prev) => [newDoc, ...prev])
+    e.target.value = ""
+  }
+
+  function fileIcon(ext: string) {
+    const e = ext.toLowerCase()
+    if (e === "pdf") return <FileText className="size-3.5 text-red-500" />
+    if (["doc", "docx"].includes(e)) return <FileText className="size-3.5 text-blue-500" />
+    if (["xls", "xlsx"].includes(e)) return <FileText className="size-3.5 text-green-600" />
+    if (["zip", "rar", "7z"].includes(e)) return <Archive className="size-3.5 text-amber-500" />
+    return <File className="size-3.5 text-gray-400" />
   }
 
   const isAdmin = role === "admin"
@@ -444,6 +490,63 @@ export default function EditShipmentPage() {
           rows={3}
           className="w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none placeholder:text-gray-400"
         />
+      </div>
+
+      {/* Files card */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100">
+          <h2 className="text-[13px] font-semibold text-gray-800">
+            Attached Files
+            {shipmentFiles.length > 0 && (
+              <span className="ml-2 text-[11px] font-medium text-gray-400">
+                ({shipmentFiles.length})
+              </span>
+            )}
+          </h2>
+          <button
+            type="button"
+            onClick={handleAttachFile}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+          >
+            <Paperclip className="size-3.5" />
+            Attach File
+          </button>
+          <input
+            ref={fileInputRef}
+            type="file"
+            className="hidden"
+            onChange={handleFileInputChange}
+          />
+        </div>
+        {shipmentFiles.length === 0 ? (
+          <div className="py-8 text-center">
+            <p className="text-[13px] text-gray-400">No files attached to this shipment.</p>
+            <button
+              type="button"
+              onClick={handleAttachFile}
+              className="mt-2 text-[12px] font-medium text-blue-600 hover:text-blue-700 transition-colors"
+            >
+              Attach a file
+            </button>
+          </div>
+        ) : (
+          <div className="divide-y divide-gray-50">
+            {shipmentFiles.map((f) => (
+              <div key={f.id} className="flex items-center gap-3 px-5 py-3">
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-gray-50 border border-gray-100">
+                  {fileIcon(f.ext)}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[13px] font-medium text-gray-800 truncate">{f.name}</p>
+                  <p className="text-[11px] text-gray-400">{f.size} · {f.uploadedAt}</p>
+                </div>
+                <span className="text-[11px] font-medium text-gray-400 whitespace-nowrap">
+                  {f.category}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

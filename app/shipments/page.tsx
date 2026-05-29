@@ -7,7 +7,7 @@ import {
   Truck, PackageCheck, PackageOpen, AlertTriangle,
   ChevronLeft, ChevronRight,
 } from "lucide-react"
-import { useRole, useShipments } from "@/components/layout/app-shell"
+import { useRole, useShipments, useProducts } from "@/components/layout/app-shell"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { IconButton } from "@/components/ui/icon-button"
@@ -25,6 +25,7 @@ export default function ShipmentsPage() {
   const router = useRouter()
   const { role } = useRole()
   const { shipments, setShipments } = useShipments()
+  const { setProducts } = useProducts()
 
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<ShipmentStatus | "all">("all")
@@ -65,6 +66,13 @@ export default function ShipmentsPage() {
   /* ── Actions ─────────────────────────────────────────── */
   function handleCreate(shipment: Shipment) {
     setShipments((prev) => [shipment, ...prev])
+    // Increase Incoming quantity for every product in this shipment
+    setProducts((prev) =>
+      prev.map((p) => {
+        const sp = shipment.products.find((x) => x.productId === p.id)
+        return sp ? { ...p, incoming: p.incoming + sp.units } : p
+      })
+    )
     setCreateOpen(false)
   }
 

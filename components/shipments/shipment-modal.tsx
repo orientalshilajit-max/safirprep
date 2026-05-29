@@ -103,7 +103,7 @@ export function ShipmentModal({ isOpen, onClose, onSave }: ShipmentModalProps) {
       id: `s${Date.now()}`,
       shipmentNumber: `IN-${maxNum + 1}`,
       clientId: "c1",
-      clientName: role === "client" ? "John Smith" : "TechVault Co.",
+      clientName: "TechVault Co.",
       products: sProducts,
       tracking: sTracking,
       status: "In Transit",

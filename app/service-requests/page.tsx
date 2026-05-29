@@ -6,7 +6,7 @@ import {
   FileText, CheckCircle, AlertTriangle, Clock, List,
   ChevronLeft, ChevronRight,
 } from "lucide-react"
-import { useRole, useRequests, useProducts } from "@/components/layout/app-shell"
+import { useRole, useRequests, useProducts, useInvoices, useFiles, useClients } from "@/components/layout/app-shell"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { IconButton } from "@/components/ui/icon-button"
@@ -15,16 +15,37 @@ import { StatCard } from "@/components/ui/stat-card"
 import { ConfirmModal } from "@/components/ui/confirm-modal"
 import { RequestModal, type RequestFormData } from "@/components/service-requests/request-modal"
 import { SERVICE_TYPES } from "@/lib/types"
-import type { ServiceRequest, ServiceStatus, ServiceType, DataTableColumn } from "@/lib/types"
+import type { ServiceRequest, ServiceStatus, ServiceType, DataTableColumn, FileCategory, Invoice } from "@/lib/types"
 
 const PAGE_SIZE = 8
+
+/* Unit prices used when auto-generating an invoice on "Invoiced" status */
+const SERVICE_UNIT_PRICES: Record<string, number> = {
+  "FBA Prep": 0.85,
+  "FBM Fulfillment": 0.65,
+  "Labeling": 0.45,
+  "Bundling": 1.20,
+  "Inspection": 1.50,
+  "Forwarding": 0.75,
+  "Storage": 22.00,
+  "Returns": 2.00,
+  "Other": 1.00,
+}
+
+function fileCategory(service: string): FileCategory {
+  if (["FBA Prep", "Labeling", "Bundling"].includes(service)) return "Labels"
+  return "Product Docs"
+}
 
 const OPEN_STATUSES: ServiceStatus[] = ["New"]
 
 export default function ServiceRequestsPage() {
   const { role } = useRole()
   const { requests, setRequests } = useRequests()
-  const { setProducts } = useProducts()
+  const { products, setProducts } = useProducts()
+  const { invoices, setInvoices } = useInvoices()
+  const { setFiles } = useFiles()
+  const { clients } = useClients()
 
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<ServiceStatus | "all">("all")
@@ -76,11 +97,40 @@ export default function ServiceRequestsPage() {
     setModalOpen(true)
   }
 
+  /* ── File sync helper ───────────────────────────────── */
+  function syncFilesToContext(req: { id: string; requestNumber: string; clientId: string; clientName: string; service: string; createdAt: string }, formFiles: RequestFormData["files"]) {
+    if (!formFiles.length) return
+    setFiles((prev) => {
+      const existingNames = new Set(
+        prev.filter((f) => f.relatedType === "service-request" && f.relatedId === req.id).map((f) => f.name)
+      )
+      const newDocs = formFiles
+        .filter((sf) => !existingNames.has(sf.name))
+        .map((sf) => ({
+          id: `fd-req-${sf.id}`,
+          name: sf.name,
+          ext: sf.name.split(".").pop()?.toLowerCase() ?? "bin",
+          size: sf.size,
+          category: fileCategory(req.service),
+          relatedTo: req.requestNumber,
+          relatedType: "service-request" as const,
+          relatedId: req.id,
+          clientId: req.clientId,
+          clientName: req.clientName,
+          uploadedBy: req.clientName,
+          uploadedAt: req.createdAt,
+        }))
+      return newDocs.length ? [...newDocs, ...prev] : prev
+    })
+  }
+
   function handleSave(form: RequestFormData) {
+    const today = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+
     if (editing) {
-      // Edit: update request (status change by admin or field edits)
       const oldStatus = editing.status
       const newStatus = form.status
+      const productName = requests.find((x) => x.id === editing.id)?.productName ?? editing.productName
 
       setRequests((prev) =>
         prev.map((r) =>
@@ -88,7 +138,7 @@ export default function ServiceRequestsPage() {
             ? {
                 ...r,
                 productId: form.productId,
-                productName: requests.find((x) => x.id === editing.id)?.productName ?? form.productId,
+                productName,
                 quantity: form.quantity,
                 service: form.service as ServiceType,
                 status: newStatus,
@@ -107,30 +157,66 @@ export default function ServiceRequestsPage() {
         )
       )
 
-      // If admin cancels a New request that had inventory deducted, restore stock
+      // Restore inventory if admin cancels a New request
       if (role === "admin" && newStatus === "Cancelled" && oldStatus === "New" && editing.inventoryDeducted) {
         setProducts((prev) =>
           prev.map((p) =>
-            p.id === editing.productId
-              ? { ...p, available: p.available + editing.quantity }
-              : p
+            p.id === editing.productId ? { ...p, available: p.available + editing.quantity } : p
           )
         )
       }
+
+      // Auto-generate invoice when admin marks request as Invoiced (once only)
+      const alreadyHasInvoice = invoices.some((inv) => inv.relatedRequestNumber === editing.requestNumber)
+      if (role === "admin" && newStatus === "Invoiced" && oldStatus !== "Invoiced" && !alreadyHasInvoice) {
+        const client = clients.find((c) => c.id === editing.clientId)
+        const allNums = invoices.map((i) => parseInt(i.invoiceNumber.replace("INV-", "")) || 0)
+        const nextInvNum = Math.max(...allNums, 41) + 1
+        const dueDate = new Date(Date.now() + 14 * 86_400_000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+        const unitPrice = SERVICE_UNIT_PRICES[form.service] ?? 1.00
+
+        const newInvoice: Invoice = {
+          id: `inv-${Date.now()}`,
+          invoiceNumber: `INV-${nextInvNum.toString().padStart(4, "0")}`,
+          clientId: editing.clientId,
+          clientName: editing.clientName,
+          clientEmail: client?.email ?? "",
+          clientAddress: client?.phone ?? "",
+          date: today,
+          dueDate,
+          status: "Unpaid",
+          lineItems: [
+            {
+              id: `li-${Date.now()}`,
+              description: `${form.service} – ${productName} (${form.quantity} units)`,
+              quantity: form.quantity,
+              unitPrice,
+            },
+          ],
+          notes: "",
+          relatedRequestNumber: editing.requestNumber,
+        }
+        setInvoices((prev) => [newInvoice, ...prev])
+      }
+
+      // Sync any newly-attached files to Files & Documents
+      syncFilesToContext(
+        { id: editing.id, requestNumber: editing.requestNumber, clientId: editing.clientId, clientName: editing.clientName, service: form.service, createdAt: editing.createdAt },
+        form.files
+      )
     } else {
       // Create new request
       const allNums = requests.map((r) => parseInt(r.requestNumber.replace("REQ-", "")) || 0)
       const nextNum = Math.max(...allNums, 2005) + 1
+      const clientName = "TechVault Co."
 
-      const product = requests.find(() => false) // placeholder
-      // Get product name from the products context via the form
       const newReq: ServiceRequest = {
         id: `r${Date.now()}`,
         requestNumber: `REQ-${nextNum}`,
         clientId: "c1",
-        clientName: role === "client" ? "John Smith" : "TechVault Co.",
+        clientName,
         productId: form.productId,
-        productName: "", // filled below
+        productName: "",
         productSku: "",
         service: form.service as ServiceType,
         quantity: form.quantity,
@@ -145,27 +231,29 @@ export default function ServiceRequestsPage() {
           unitsPerBundle: form.unitsPerBundle,
           serviceDescription: form.serviceDescription,
         },
-        createdAt: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+        createdAt: today,
         inventoryDeducted: true,
       }
 
-      // We need to read the product to get name — use setProducts callback pattern
       setProducts((prev) => {
         const p = prev.find((x) => x.id === form.productId)
         if (p) {
           newReq.productName = p.name
           newReq.productSku = p.sku
-          // Deduct inventory
           return prev.map((x) =>
-            x.id === form.productId
-              ? { ...x, available: Math.max(0, x.available - form.quantity) }
-              : x
+            x.id === form.productId ? { ...x, available: Math.max(0, x.available - form.quantity) } : x
           )
         }
         return prev
       })
 
       setRequests((prev) => [newReq, ...prev])
+
+      // Sync attached files immediately
+      syncFilesToContext(
+        { id: newReq.id, requestNumber: newReq.requestNumber, clientId: newReq.clientId, clientName: newReq.clientName, service: form.service, createdAt: today },
+        form.files
+      )
     }
 
     setModalOpen(false)
