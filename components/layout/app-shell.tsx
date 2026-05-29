@@ -3,12 +3,13 @@
 import { createContext, useContext, useState } from "react"
 import { Sidebar } from "./sidebar"
 import { Header } from "./header"
-import type { UserRole, Product, Shipment, ServiceRequest, FileDoc, Invoice } from "@/lib/types"
+import type { UserRole, Product, Shipment, ServiceRequest, FileDoc, Invoice, Client } from "@/lib/types"
 import { mockProducts } from "@/lib/mock-data"
 import { mockShipments } from "@/lib/mock-shipments"
 import { mockRequests } from "@/lib/mock-requests"
 import { mockFiles } from "@/lib/mock-files"
 import { mockInvoices } from "@/lib/mock-invoices"
+import { mockClients } from "@/lib/mock-clients"
 
 type AppContextType = {
   role: UserRole
@@ -23,6 +24,8 @@ type AppContextType = {
   setFiles: React.Dispatch<React.SetStateAction<FileDoc[]>>
   invoices: Invoice[]
   setInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>
+  clients: Client[]
+  setClients: React.Dispatch<React.SetStateAction<Client[]>>
 }
 
 const AppContext = createContext<AppContextType>({
@@ -38,6 +41,8 @@ const AppContext = createContext<AppContextType>({
   setFiles: () => {},
   invoices: [],
   setInvoices: () => {},
+  clients: [],
+  setClients: () => {},
 })
 
 export function useRole() {
@@ -70,6 +75,11 @@ export function useInvoices() {
   return { invoices, setInvoices }
 }
 
+export function useClients() {
+  const { clients, setClients } = useContext(AppContext)
+  return { clients, setClients }
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const [role, setRole] = useState<UserRole>("client")
   const [products, setProducts] = useState<Product[]>(mockProducts)
@@ -77,9 +87,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [requests, setRequests] = useState<ServiceRequest[]>(mockRequests)
   const [files, setFiles] = useState<FileDoc[]>(mockFiles)
   const [invoices, setInvoices] = useState<Invoice[]>(mockInvoices)
+  const [clients, setClients] = useState<Client[]>(mockClients)
 
   return (
-    <AppContext.Provider value={{ role, setRole, products, setProducts, shipments, setShipments, requests, setRequests, files, setFiles, invoices, setInvoices }}>
+    <AppContext.Provider value={{ role, setRole, products, setProducts, shipments, setShipments, requests, setRequests, files, setFiles, invoices, setInvoices, clients, setClients }}>
       <div className="flex h-screen bg-slate-50 overflow-hidden">
         <Sidebar role={role} />
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">

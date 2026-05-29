@@ -1,4 +1,21 @@
 export type UserRole = "admin" | "client"
+
+export type ClientStatus = "Active" | "Pending" | "Inactive"
+export type LoginStatus = "No Login" | "Invited" | "Active"
+
+export type Client = {
+  id: string
+  companyName: string
+  contactName: string
+  email: string
+  phone: string
+  status: ClientStatus
+  loginStatus: LoginStatus
+  lastActivity: string | null
+  notes: string
+  isArchived?: boolean
+  invitedAt?: string
+}
 export type ProductStatus = "Active" | "Archived"
 export type ShipmentStatus =
   | "In Transit"
