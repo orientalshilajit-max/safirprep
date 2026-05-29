@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useRef, useState } from "react"
 import { FileText, Upload, X } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import { useProducts, useRole } from "@/components/layout/app-shell"
@@ -122,6 +122,86 @@ const inputClass =
 const textareaClass =
   "w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none placeholder:text-gray-400"
 
+/* ── ServiceFields — standalone so React doesn't recreate it on every render */
+type ServiceFieldsProps = {
+  service: ServiceType | ""
+  form: FormState
+  onSet: <K extends keyof FormState>(key: K, value: FormState[K]) => void
+  onAddFiles: (files: ServiceFile[]) => void
+  canEdit: boolean
+}
+
+function ServiceFields({ service, form, onSet, onAddFiles, canEdit }: ServiceFieldsProps) {
+  const sectionClass = "mt-3 p-4 bg-gray-50 rounded-lg border border-gray-100 space-y-3"
+
+  if (service === "FBA Prep") return (
+    <div className={sectionClass}>
+      <p className={labelClass}>FBA Prep Details</p>
+      <div className="flex flex-wrap gap-2">
+        <UploadBtn label="Upload FNSKU Label" onAdd={onAddFiles} />
+        <UploadBtn label="Upload Box Label" onAdd={onAddFiles} optional />
+      </div>
+      <div>
+        <label className={labelClass}>Prep Notes</label>
+        <textarea rows={2} value={form.prepNotes} onChange={(e) => onSet("prepNotes", e.target.value)}
+          placeholder="e.g. poly bag, bubble wrap, desiccant…" className={textareaClass} disabled={!canEdit} />
+      </div>
+    </div>
+  )
+
+  if (service === "FBM Fulfillment") return (
+    <div className={sectionClass}>
+      <p className={labelClass}>FBM Details</p>
+      <UploadBtn label="Upload Shipping Label" onAdd={onAddFiles} />
+      <div className="mt-2">
+        <label className={labelClass}>Order / Recipient Notes</label>
+        <textarea rows={2} value={form.orderNotes} onChange={(e) => onSet("orderNotes", e.target.value)}
+          placeholder="Recipient name, special instructions…" className={textareaClass} disabled={!canEdit} />
+      </div>
+    </div>
+  )
+
+  if (service === "Labeling") return (
+    <div className={sectionClass}>
+      <p className={labelClass}>Labeling Details</p>
+      <UploadBtn label="Upload Label File" onAdd={onAddFiles} />
+      <div className="mt-2">
+        <label className={labelClass}>Label Placement Notes</label>
+        <textarea rows={2} value={form.placementNotes} onChange={(e) => onSet("placementNotes", e.target.value)}
+          placeholder="e.g. apply on bottom, avoid seams…" className={textareaClass} disabled={!canEdit} />
+      </div>
+    </div>
+  )
+
+  if (service === "Bundling") return (
+    <div className={sectionClass}>
+      <p className={labelClass}>Bundling Details</p>
+      <div>
+        <label className={labelClass}>Bundle Instructions</label>
+        <textarea rows={2} value={form.bundleInstructions} onChange={(e) => onSet("bundleInstructions", e.target.value)}
+          placeholder="How should units be bundled?" className={textareaClass} disabled={!canEdit} />
+      </div>
+      <div>
+        <label className={labelClass}>Units per Bundle</label>
+        <input type="number" min="1" value={form.unitsPerBundle}
+          onChange={(e) => onSet("unitsPerBundle", Number(e.target.value))}
+          className="w-28 px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          disabled={!canEdit} />
+      </div>
+    </div>
+  )
+
+  if (service === "Other") return (
+    <div className={sectionClass}>
+      <label className={labelClass}>Service Description <span className="text-red-500">*</span></label>
+      <textarea rows={3} value={form.serviceDescription} onChange={(e) => onSet("serviceDescription", e.target.value)}
+        placeholder="Describe the service needed in detail…" className={textareaClass} disabled={!canEdit} />
+    </div>
+  )
+
+  return null
+}
+
 /* ── Props ──────────────────────────────────────────────── */
 type RequestModalProps = {
   isOpen: boolean
@@ -135,18 +215,15 @@ export function RequestModal({ isOpen, onClose, onSave, request }: RequestModalP
   const { products } = useProducts()
   const [form, setForm] = useState<FormState>(emptyForm())
   const [error, setError] = useState("")
+  // Track the (isOpen, request) pair we last initialised the form for.
+  const [prevKey, setPrevKey] = useState<string>("")
+  const currentKey = `${isOpen}|${request?.id ?? "__new__"}`
 
-  const isEdit = !!request
-  const isAdmin = role === "admin"
-  const activeProducts = products.filter((p) => p.status === "Active")
-  const selectedProduct = activeProducts.find((p) => p.id === form.productId)
-    ?? products.find((p) => p.id === form.productId) // include if archived but in existing request
-
-  /* ── Init ───────────────────────────────────────────── */
-  useEffect(() => {
-    if (!isOpen) return
-    if (request) {
-      setForm({
+  // Reset form during render when the modal opens for a new / different request.
+  if (prevKey !== currentKey) {
+    setPrevKey(currentKey)
+    if (isOpen) {
+      setForm(request ? {
         productId: request.productId,
         quantity: request.quantity,
         useAllAvailable: false,
@@ -160,23 +237,27 @@ export function RequestModal({ isOpen, onClose, onSave, request }: RequestModalP
         bundleInstructions: request.serviceDetails.bundleInstructions ?? "",
         unitsPerBundle: request.serviceDetails.unitsPerBundle ?? 1,
         serviceDescription: request.serviceDetails.serviceDescription ?? "",
-      })
-    } else {
-      setForm(emptyForm())
+      } : emptyForm())
+      setError("")
     }
-    setError("")
-  }, [isOpen, request])
+  }
+
+  const isEdit = !!request
+  const isAdmin = role === "admin"
+  const activeProducts = products.filter((p) => p.status === "Active")
+  const selectedProduct = activeProducts.find((p) => p.id === form.productId)
+    ?? products.find((p) => p.id === form.productId) // include archived products on existing requests
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((f) => ({ ...f, [key]: value }))
   }
 
-  /* ── Use all available ──────────────────────────────── */
-  useEffect(() => {
-    if (form.useAllAvailable && selectedProduct) {
-      setForm((f) => ({ ...f, quantity: selectedProduct.available }))
-    }
-  }, [form.useAllAvailable, form.productId, selectedProduct?.available]) // eslint-disable-line
+  // Derive the effective quantity: if "use all available" is checked, pull
+  // directly from the product rather than syncing via a useEffect.
+  const effectiveQuantity =
+    form.useAllAvailable && selectedProduct
+      ? selectedProduct.available
+      : form.quantity
 
   /* ── Files ──────────────────────────────────────────── */
   function addFiles(newFiles: ServiceFile[]) {
@@ -189,87 +270,15 @@ export function RequestModal({ isOpen, onClose, onSave, request }: RequestModalP
   /* ── Submit ─────────────────────────────────────────── */
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!form.productId) { setError("Select a product."); return }
-    if (!form.service)   { setError("Select a service type."); return }
-    if (form.quantity <= 0) { setError("Enter a quantity greater than 0."); return }
+    if (!form.productId)         { setError("Select a product."); return }
+    if (!form.service)           { setError("Select a service type."); return }
+    if (effectiveQuantity <= 0)  { setError("Enter a quantity greater than 0."); return }
     setError("")
-    onSave(form)
+    onSave({ ...form, quantity: effectiveQuantity })
   }
 
   /* ── Readonly for clients editing non-New requests ── */
   const canEdit = isAdmin || !isEdit || request?.status === "New"
-
-  /* ── Conditional service fields ─────────────────────── */
-  function ServiceFields() {
-    const sectionClass = "mt-3 p-4 bg-gray-50 rounded-lg border border-gray-100 space-y-3"
-
-    if (form.service === "FBA Prep") return (
-      <div className={sectionClass}>
-        <p className={labelClass}>FBA Prep Details</p>
-        <div className="flex flex-wrap gap-2">
-          <UploadBtn label="Upload FNSKU Label" onAdd={addFiles} />
-          <UploadBtn label="Upload Box Label" onAdd={addFiles} optional />
-        </div>
-        <div>
-          <label className={labelClass}>Prep Notes</label>
-          <textarea rows={2} value={form.prepNotes} onChange={(e) => set("prepNotes", e.target.value)}
-            placeholder="e.g. poly bag, bubble wrap, desiccant…" className={textareaClass} disabled={!canEdit} />
-        </div>
-      </div>
-    )
-
-    if (form.service === "FBM Fulfillment") return (
-      <div className={sectionClass}>
-        <p className={labelClass}>FBM Details</p>
-        <UploadBtn label="Upload Shipping Label" onAdd={addFiles} />
-        <div className="mt-2">
-          <label className={labelClass}>Order / Recipient Notes</label>
-          <textarea rows={2} value={form.orderNotes} onChange={(e) => set("orderNotes", e.target.value)}
-            placeholder="Recipient name, special instructions…" className={textareaClass} disabled={!canEdit} />
-        </div>
-      </div>
-    )
-
-    if (form.service === "Labeling") return (
-      <div className={sectionClass}>
-        <p className={labelClass}>Labeling Details</p>
-        <UploadBtn label="Upload Label File" onAdd={addFiles} />
-        <div className="mt-2">
-          <label className={labelClass}>Label Placement Notes</label>
-          <textarea rows={2} value={form.placementNotes} onChange={(e) => set("placementNotes", e.target.value)}
-            placeholder="e.g. apply on bottom, avoid seams…" className={textareaClass} disabled={!canEdit} />
-        </div>
-      </div>
-    )
-
-    if (form.service === "Bundling") return (
-      <div className={sectionClass}>
-        <p className={labelClass}>Bundling Details</p>
-        <div>
-          <label className={labelClass}>Bundle Instructions</label>
-          <textarea rows={2} value={form.bundleInstructions} onChange={(e) => set("bundleInstructions", e.target.value)}
-            placeholder="How should units be bundled?" className={textareaClass} disabled={!canEdit} />
-        </div>
-        <div>
-          <label className={labelClass}>Units per Bundle</label>
-          <input type="number" min="1" value={form.unitsPerBundle}
-            onChange={(e) => set("unitsPerBundle", Number(e.target.value))}
-            className="w-28 px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-            disabled={!canEdit} />
-        </div>
-      </div>
-    )
-
-    if (form.service === "Other") return (
-      <div className={sectionClass}>
-        <label className={labelClass}>Service Description <span className="text-red-500">*</span></label>
-        <textarea rows={3} value={form.serviceDescription} onChange={(e) => set("serviceDescription", e.target.value)}
-          placeholder="Describe the service needed in detail…" className={textareaClass} disabled={!canEdit} />
-      </div>
-    )
-
-    return null
-  }
 
   return (
     <Modal
@@ -336,7 +345,7 @@ export function RequestModal({ isOpen, onClose, onSave, request }: RequestModalP
           <div className="flex items-center gap-3 flex-wrap">
             <input
               type="number" min="1"
-              value={form.quantity || ""}
+              value={effectiveQuantity || ""}
               onChange={(e) => { set("quantity", Number(e.target.value)); set("useAllAvailable", false) }}
               placeholder="0"
               className="w-32 px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 tabular-nums"
@@ -366,7 +375,15 @@ export function RequestModal({ isOpen, onClose, onSave, request }: RequestModalP
             <option value="">Select service…</option>
             {SERVICE_TYPES.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
-          {form.service && <ServiceFields />}
+          {form.service && (
+            <ServiceFields
+              service={form.service}
+              form={form}
+              onSet={set}
+              onAddFiles={addFiles}
+              canEdit={canEdit}
+            />
+          )}
         </div>
 
         {/* Attachments */}

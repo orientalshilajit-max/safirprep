@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useCallback, useEffect } from "react"
+import { useState, useRef, useCallback } from "react"
 import {
   Building2,
   Truck,
@@ -404,7 +404,22 @@ const textareaCls =
 export default function SettingsPage() {
   const { role } = useRole()
 
-  /* ── Admin gate ── */
+  // All hooks must come before any conditional return.
+  const [company, setCompany] = useState<CompanyInfo>(defaultCompany)
+  const [carriers, setCarriers] = useState<ListItem[]>(defaultCarriers)
+  const [serviceTypes, setServiceTypes] = useState<ListItem[]>(defaultServiceTypes)
+  const [invoice, setInvoice] = useState<InvoiceSettings>(defaultInvoice)
+  const [inviteSubject, setInviteSubject] = useState("You're invited to the Safir client portal")
+  const [inviteMessage, setInviteMessage] = useState(
+    "Hi [Contact Name],\n\nYou've been invited to access your logistics dashboard at Safir. Click the link below to set up your account.\n\nIf you have any questions, reply to this email.\n\n— The Safir Team"
+  )
+  const [activeSection, setActiveSection] = useState("company")
+  const companySave = useSaveFlash()
+  const invoiceSave = useSaveFlash()
+  const userSave = useSaveFlash()
+  const contentRef = useRef<HTMLDivElement>(null)
+
+  /* ── Admin gate — after all hooks ── */
   if (role !== "admin") {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center gap-3">
@@ -416,23 +431,6 @@ export default function SettingsPage() {
       </div>
     )
   }
-
-  /* ── Local state ── */
-  const [company, setCompany] = useState<CompanyInfo>(defaultCompany)
-  const [carriers, setCarriers] = useState<ListItem[]>(defaultCarriers)
-  const [serviceTypes, setServiceTypes] = useState<ListItem[]>(defaultServiceTypes)
-  const [invoice, setInvoice] = useState<InvoiceSettings>(defaultInvoice)
-  const [inviteSubject, setInviteSubject] = useState("You're invited to the Safir client portal")
-  const [inviteMessage, setInviteMessage] = useState(
-    "Hi [Contact Name],\n\nYou've been invited to access your logistics dashboard at Safir. Click the link below to set up your account.\n\nIf you have any questions, reply to this email.\n\n— The Safir Team"
-  )
-  const [activeSection, setActiveSection] = useState("company")
-
-  const companySave = useSaveFlash()
-  const invoiceSave = useSaveFlash()
-  const userSave = useSaveFlash()
-
-  const contentRef = useRef<HTMLDivElement>(null)
 
   function scrollTo(id: string) {
     setActiveSection(id)

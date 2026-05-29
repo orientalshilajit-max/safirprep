@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import { Pencil, Download, X, Plus, Trash2, Box, CheckCircle } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -97,14 +97,18 @@ type InvoiceModalProps = {
 
 export function InvoiceModal({ invoice, role, onClose, onSave }: InvoiceModalProps) {
   const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState<Invoice | null>(null)
+  const [draft, setDraft] = useState<Invoice | null>(
+    () => invoice ? structuredClone(invoice) : null
+  )
+  // Track the previous invoice reference so we can reset during render
+  // when the caller opens the modal for a different invoice.
+  const [prevInvoice, setPrevInvoice] = useState(invoice)
 
-  useEffect(() => {
-    if (invoice) {
-      setDraft(structuredClone(invoice))
-      setEditing(false)
-    }
-  }, [invoice])
+  if (prevInvoice !== invoice) {
+    setPrevInvoice(invoice)
+    setDraft(invoice ? structuredClone(invoice) : null)
+    setEditing(false)
+  }
 
   if (!invoice || !draft) return null
 

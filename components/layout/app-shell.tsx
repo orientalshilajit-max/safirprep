@@ -153,7 +153,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     )
 
     return () => subscription.unsubscribe()
-  }, [isMockMode]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isMockMode])
 
   // ── Logout ──────────────────────────────────────────────────
   const handleLogout = useCallback(async () => {

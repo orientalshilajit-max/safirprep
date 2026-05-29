@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState, useCallback } from "react"
+import { useState, useCallback } from "react"
 import { Plus, X } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import { ProductModal } from "@/components/products/product-modal"
@@ -33,15 +33,19 @@ export function ShipmentModal({ isOpen, onClose, onSave }: ShipmentModalProps) {
   const [error, setError] = useState("")
   const [createProductRowId, setCreateProductRowId] = useState<string | null>(null)
   const [productModalOpen, setProductModalOpen] = useState(false)
+  // Track isOpen so we can reset form state during render when the modal
+  // transitions from closed → open (avoids setState in a useEffect).
+  const [prevIsOpen, setPrevIsOpen] = useState(false)
 
-  useEffect(() => {
+  if (isOpen !== prevIsOpen) {
+    setPrevIsOpen(isOpen)
     if (isOpen) {
       setProductRows([emptyProductRow()])
       setTrackingRows([emptyTrackingRow()])
       setNotes("")
       setError("")
     }
-  }, [isOpen])
+  }
 
   /* ── Product rows ─────────────────────────────────────── */
   const addProductRow = () => setProductRows((r) => [...r, emptyProductRow()])

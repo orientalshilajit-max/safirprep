@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useState } from "react"
 import { Upload } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import type { Product, ProductStatus, UserRole } from "@/lib/types"
@@ -49,8 +49,12 @@ export function ProductModal({
   zIndex,
 }: ProductModalProps) {
   const [form, setForm] = useState<FormData>(empty)
+  // Track the (isOpen, product) pair we last initialised the form for.
+  const [prevKey, setPrevKey] = useState<string>("")
+  const currentKey = `${isOpen}|${product?.id ?? "__new__"}`
 
-  useEffect(() => {
+  if (prevKey !== currentKey) {
+    setPrevKey(currentKey)
     if (product) {
       setForm({
         name: product.name,
@@ -67,7 +71,7 @@ export function ProductModal({
     } else {
       setForm(empty)
     }
-  }, [product, isOpen])
+  }
 
   function set<K extends keyof FormData>(key: K, value: FormData[K]) {
     setForm((f) => ({ ...f, [key]: value }))

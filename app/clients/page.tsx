@@ -65,30 +65,8 @@ export default function ClientsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Client | null>(null)
   const [inviteSent, setInviteSent] = useState<string | null>(null)
 
-  /* Redirect non-admins */
-  if (role !== "admin") {
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-center gap-3">
-        <div className="flex size-14 items-center justify-center rounded-full bg-gray-100">
-          <Users className="size-6 text-gray-400" />
-        </div>
-        <p className="text-[15px] font-semibold text-gray-700">Admin access only</p>
-        <p className="text-[13px] text-gray-400">Switch to Admin view to manage clients.</p>
-      </div>
-    )
-  }
-
+  // All hooks must come before any conditional return.
   const visible = clients.filter((c) => !c.isArchived)
-
-  /* ── Stat counts ─────────────────────────────────── */
-  const counts = {
-    active: visible.filter((c) => c.status === "Active").length,
-    pending: visible.filter((c) => c.status === "Pending").length,
-    inactive: visible.filter((c) => c.status === "Inactive").length,
-    invited: visible.filter((c) => c.loginStatus === "Invited").length,
-  }
-
-  /* ── Filtered + paginated ────────────────────────── */
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
     return visible.filter((c) => {
@@ -101,6 +79,27 @@ export default function ClientsPage() {
       return matchSearch && matchStatus
     })
   }, [visible, search, statusFilter])
+
+  /* Non-admin gate — after all hooks */
+  if (role !== "admin") {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-center gap-3">
+        <div className="flex size-14 items-center justify-center rounded-full bg-gray-100">
+          <Users className="size-6 text-gray-400" />
+        </div>
+        <p className="text-[15px] font-semibold text-gray-700">Admin access only</p>
+        <p className="text-[13px] text-gray-400">Switch to Admin view to manage clients.</p>
+      </div>
+    )
+  }
+
+  /* ── Stat counts ─────────────────────────────────── */
+  const counts = {
+    active: visible.filter((c) => c.status === "Active").length,
+    pending: visible.filter((c) => c.status === "Pending").length,
+    inactive: visible.filter((c) => c.status === "Inactive").length,
+    invited: visible.filter((c) => c.loginStatus === "Invited").length,
+  }
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const safePage = Math.min(page, totalPages)

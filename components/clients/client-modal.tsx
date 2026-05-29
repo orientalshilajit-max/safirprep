@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import { Modal } from "@/components/ui/modal"
 import type { Client, ClientStatus } from "@/lib/types"
 
@@ -32,10 +32,17 @@ const empty: ClientFormData = {
 }
 
 export function ClientModal({ isOpen, onClose, onSave, client }: ClientModalProps) {
+  // Track the last (isOpen, client) pair we initialised the form for.
+  // When either changes we reset during render — the React-approved
+  // alternative to calling setState inside a useEffect.
+  const [prevKey, setPrevKey] = useState<string>("")
+  const currentKey = `${isOpen}|${client?.id ?? "__new__"}`
+
   const [form, setForm] = useState<ClientFormData>(empty)
   const [errors, setErrors] = useState<Partial<Record<keyof ClientFormData, string>>>({})
 
-  useEffect(() => {
+  if (prevKey !== currentKey) {
+    setPrevKey(currentKey)
     if (isOpen) {
       setForm(
         client
@@ -51,7 +58,7 @@ export function ClientModal({ isOpen, onClose, onSave, client }: ClientModalProp
       )
       setErrors({})
     }
-  }, [isOpen, client])
+  }
 
   function set<K extends keyof ClientFormData>(key: K, val: ClientFormData[K]) {
     setForm((f) => ({ ...f, [key]: val }))

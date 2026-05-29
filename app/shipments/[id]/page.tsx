@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useRef } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { ArrowLeft, Plus, X, Save, Paperclip, FileText, File, Archive } from "lucide-react"
 import { useRole, useProducts, useShipments, useFiles } from "@/components/layout/app-shell"
@@ -32,23 +32,21 @@ export default function EditShipmentPage() {
 
   const shipment = shipments.find((s) => s.id === params.id)
 
-  /* ── Local edit state ─────────────────────────────────── */
-  const [status, setStatus] = useState<ShipmentStatus>("In Transit")
-  const [shipProducts, setShipProducts] = useState<ShipmentProduct[]>([])
-  const [shipTracking, setShipTracking] = useState<ShipmentTracking[]>([])
-  const [notes, setNotes] = useState("")
-  const [originalStatus, setOriginalStatus] = useState<ShipmentStatus>("In Transit")
+  /* ── Local edit state — lazy-initialised from shipment ─────── */
+  const [status, setStatus] = useState<ShipmentStatus>(
+    () => shipment?.status ?? "In Transit"
+  )
+  const [originalStatus, setOriginalStatus] = useState<ShipmentStatus>(
+    () => shipment?.status ?? "In Transit"
+  )
+  const [shipProducts, setShipProducts] = useState<ShipmentProduct[]>(
+    () => shipment ? shipment.products.map((p) => ({ ...p })) : []
+  )
+  const [shipTracking, setShipTracking] = useState<ShipmentTracking[]>(
+    () => shipment ? shipment.tracking.map((t) => ({ ...t })) : []
+  )
+  const [notes, setNotes] = useState<string>(() => shipment?.notes ?? "")
   const [saved, setSaved] = useState(false)
-
-  useEffect(() => {
-    if (shipment) {
-      setStatus(shipment.status)
-      setOriginalStatus(shipment.status)
-      setShipProducts(shipment.products.map((p) => ({ ...p })))
-      setShipTracking(shipment.tracking.map((t) => ({ ...t })))
-      setNotes(shipment.notes)
-    }
-  }, [shipment?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!shipment) {
     return (
