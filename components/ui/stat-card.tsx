@@ -4,6 +4,7 @@ import type { LucideIcon } from "lucide-react"
 type StatCardProps = {
   label: string
   value: number
+  valueDisplay?: string
   sublabel?: string
   icon: LucideIcon
   iconClass: string
@@ -11,7 +12,7 @@ type StatCardProps = {
   onClick?: () => void
 }
 
-export function StatCard({ label, value, sublabel, icon: Icon, iconClass, active, onClick }: StatCardProps) {
+export function StatCard({ label, value, valueDisplay, sublabel, icon: Icon, iconClass, active, onClick }: StatCardProps) {
   return (
     <button
       type="button"
@@ -28,7 +29,7 @@ export function StatCard({ label, value, sublabel, icon: Icon, iconClass, active
           <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wide">
             {label}
           </p>
-          <p className="mt-1.5 text-2xl font-bold text-gray-900 tabular-nums">{value}</p>
+          <p className="mt-1.5 text-2xl font-bold text-gray-900 tabular-nums">{valueDisplay ?? value}</p>
           {sublabel && <p className="mt-0.5 text-[11px] text-gray-400">{sublabel}</p>}
         </div>
         <div className={cn("flex size-9 shrink-0 items-center justify-center rounded-lg", iconClass)}>

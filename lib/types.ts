@@ -136,6 +136,30 @@ export type ServiceRequest = {
   inventoryDeducted?: boolean
 }
 
+export type InvoiceStatus = "Unpaid" | "Paid" | "Overdue" | "Void"
+
+export type InvoiceLineItem = {
+  id: string
+  description: string
+  quantity: number
+  unitPrice: number
+}
+
+export type Invoice = {
+  id: string
+  invoiceNumber: string
+  clientId: string
+  clientName: string
+  clientEmail: string
+  clientAddress: string
+  date: string
+  dueDate: string
+  status: InvoiceStatus
+  lineItems: InvoiceLineItem[]
+  notes: string
+  relatedRequestNumber?: string
+}
+
 export type FileCategory =
   | "Agreements"
   | "Labels"
