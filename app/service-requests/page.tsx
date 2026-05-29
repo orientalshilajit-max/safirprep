@@ -24,6 +24,7 @@ import {
   archiveRequest,
 } from "@/app/service-requests/actions"
 import { listProductClients } from "@/app/products/actions"
+import { createInvoice }      from "@/app/invoices/actions"
 import type { ServiceRequest, ServiceStatus, ServiceType, DataTableColumn, FileCategory, Invoice } from "@/lib/types"
 
 const PAGE_SIZE = 8
@@ -285,6 +286,32 @@ export default function ServiceRequestsPage() {
             setProducts((prev) => prev.map((p) => p.id === form.productId
               ? { ...p, available: Math.max(0, p.available + delta) } : p))
           }
+        }
+      }
+
+      // Auto-create invoice when admin marks request as Invoiced (Supabase mode)
+      const becomingInvoiced = form.status === "Invoiced" && editing.status !== "Invoiced"
+      const alreadyHasInvoice = invoices.some((inv) => inv.relatedRequestNumber === editing.requestNumber)
+      if (role === "admin" && becomingInvoiced && !alreadyHasInvoice) {
+        try {
+          const unitPrice = SERVICE_UNIT_PRICES[form.service] ?? 1.00
+          const dueDate   = new Date(Date.now() + 14 * 86_400_000)
+            .toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+          const newInvoice = await createInvoice({
+            clientId:  editing.clientId,
+            requestId: editing.id,
+            lineItems: [{
+              description: `${form.service} – ${updated.productName} (${form.quantity} units)`,
+              quantity:    form.quantity,
+              unitPrice,
+            }],
+            dueDate,
+            notes: "",
+          })
+          setInvoices((prev) => [newInvoice, ...prev])
+        } catch (err) {
+          // Invoice creation is best-effort; don't block the request save
+          console.error("[ServiceRequests] Invoice creation failed:", err)
         }
       }
     } else {

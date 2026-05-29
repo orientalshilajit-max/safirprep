@@ -17,6 +17,7 @@ import { listProducts } from "@/app/products/actions"
 import { listShipments } from "@/app/shipments/actions"
 import { listRequests }  from "@/app/service-requests/actions"
 import { listFiles }     from "@/app/files/actions"
+import { listInvoices }  from "@/app/invoices/actions"
 
 // ── Context type ──────────────────────────────────────────────
 
@@ -123,7 +124,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [shipments, setShipments] = useState<Shipment[]>(isMockMode ? mockShipments : [])
   const [requests,  setRequests]  = useState<ServiceRequest[]>(isMockMode ? mockRequests : [])
   const [files,     setFiles]     = useState<FileDoc[]>(isMockMode ? mockFiles : [])
-  const [invoices,  setInvoices]  = useState<Invoice[]>(mockInvoices)
+  const [invoices,  setInvoices]  = useState<Invoice[]>(isMockMode ? mockInvoices : [])
   const [clients,   setClients]   = useState<Client[]>(mockClients)
 
   // ── Session initialisation ───────────────────────────────────
@@ -141,16 +142,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         // Load all connected modules together; keep spinner until ready
         // to avoid a flash of empty-state tables.
         try {
-          const [productsData, shipmentsData, requestsData, filesData] = await Promise.all([
+          const [productsData, shipmentsData, requestsData, filesData, invoicesData] = await Promise.all([
             listProducts(),
             listShipments(),
             listRequests(),
             listFiles(),
+            listInvoices(),
           ])
           setProducts(productsData)
           setShipments(shipmentsData)
           setRequests(requestsData)
           setFiles(filesData)
+          setInvoices(invoicesData)
         } catch {
           // Leave data empty; pages will show their empty states.
         }

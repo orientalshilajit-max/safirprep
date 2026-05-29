@@ -13,7 +13,8 @@ import {
   ChevronLeft,
   ChevronRight,
 } from "lucide-react"
-import { useRole, useInvoices } from "@/components/layout/app-shell"
+import { useRole, useInvoices, useAuthUser, useIsMockMode } from "@/components/layout/app-shell"
+import { updateInvoice } from "@/app/invoices/actions"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { IconButton } from "@/components/ui/icon-button"
@@ -33,16 +34,25 @@ function invoiceTotal(inv: Invoice) {
 }
 
 export default function InvoicesPage() {
-  const { role } = useRole()
+  const { role }   = useRole()
+  const authUser   = useAuthUser()
+  const isMockMode = useIsMockMode()
   const { invoices, setInvoices } = useInvoices()
 
-  const [search, setSearch] = useState("")
+  const [search,       setSearch]       = useState("")
   const [statusFilter, setStatusFilter] = useState<InvoiceStatus | "all">("all")
-  const [page, setPage] = useState(1)
-  const [viewing, setViewing] = useState<Invoice | null>(null)
+  const [page,         setPage]         = useState(1)
+  const [viewing,      setViewing]      = useState<Invoice | null>(null)
 
-  /* ── Visible by role ────────────────────────────────── */
-  const visible = role === "admin" ? invoices : invoices.filter((inv) => inv.clientId === "c1")
+  /* ── Visible by role ────────────────────────────────────
+     In Supabase mode, DB RLS already scopes results.
+     In mock mode, manually filter by clientId.            */
+  const visible = useMemo(() => {
+    if (role === "admin") return invoices
+    if (!isMockMode) return invoices   // RLS-filtered from DB
+    const myId = authUser?.clientId ?? "c1"
+    return invoices.filter((inv) => inv.clientId === myId)
+  }, [invoices, role, isMockMode, authUser])
 
   /* ── Stat counts / sums ─────────────────────────────── */
   const stats = useMemo(() => {
@@ -75,9 +85,21 @@ export default function InvoicesPage() {
   const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
   /* ── Save edit ──────────────────────────────────────── */
-  function handleSave(updated: Invoice) {
-    setInvoices((prev) => prev.map((inv) => inv.id === updated.id ? updated : inv))
-    setViewing(updated)
+  async function handleSave(updated: Invoice) {
+    if (isMockMode) {
+      setInvoices((prev) => prev.map((inv) => inv.id === updated.id ? updated : inv))
+      setViewing(updated)
+      return
+    }
+    // Supabase mode: persist via server action (throws on error → modal catches)
+    const saved = await updateInvoice(updated.id, {
+      status:    updated.status,
+      dueDate:   updated.dueDate,
+      notes:     updated.notes,
+      lineItems: updated.lineItems,
+    })
+    setInvoices((prev) => prev.map((inv) => inv.id === saved.id ? saved : inv))
+    setViewing(saved)
   }
 
   /* ── Stat filter toggle ─────────────────────────────── */

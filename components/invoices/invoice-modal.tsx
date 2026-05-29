@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Pencil, Download, X, Plus, Trash2, Box, CheckCircle } from "lucide-react"
+import { Pencil, Download, X, Plus, Trash2, Box, CheckCircle, AlertCircle } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { cn } from "@/lib/utils"
@@ -92,11 +92,14 @@ type InvoiceModalProps = {
   invoice: Invoice | null
   role: "admin" | "client"
   onClose: () => void
-  onSave: (updated: Invoice) => void
+  /** May return a Promise; modal shows loading state while it resolves. */
+  onSave: (updated: Invoice) => void | Promise<void>
 }
 
 export function InvoiceModal({ invoice, role, onClose, onSave }: InvoiceModalProps) {
-  const [editing, setEditing] = useState(false)
+  const [editing,   setEditing]   = useState(false)
+  const [saving,    setSaving]    = useState(false)
+  const [saveError, setSaveError] = useState("")
   const [draft, setDraft] = useState<Invoice | null>(
     () => invoice ? structuredClone(invoice) : null
   )
@@ -108,6 +111,7 @@ export function InvoiceModal({ invoice, role, onClose, onSave }: InvoiceModalPro
     setPrevInvoice(invoice)
     setDraft(invoice ? structuredClone(invoice) : null)
     setEditing(false)
+    setSaveError("")
   }
 
   if (!invoice || !draft) return null
@@ -134,16 +138,24 @@ export function InvoiceModal({ invoice, role, onClose, onSave }: InvoiceModalPro
     setDraft((d) => d ? { ...d, lineItems: [...d.lineItems, newItem] } : d)
   }
 
-  function handleSave() {
-    if (draft) {
-      onSave(draft)
+  async function handleSave() {
+    if (!draft) return
+    setSaving(true)
+    setSaveError("")
+    try {
+      await onSave(draft)
       setEditing(false)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save invoice.")
+    } finally {
+      setSaving(false)
     }
   }
 
   function handleCancel() {
     setDraft(structuredClone(invoice))
     setEditing(false)
+    setSaveError("")
   }
 
   const isPaid = draft.status === "Paid"
@@ -171,17 +183,25 @@ export function InvoiceModal({ invoice, role, onClose, onSave }: InvoiceModalPro
               <>
                 <button
                   onClick={handleSave}
-                  className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 text-white text-[13px] font-semibold rounded-lg hover:bg-blue-700 transition-colors"
+                  disabled={saving}
+                  className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 text-white text-[13px] font-semibold rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-60"
                 >
                   <CheckCircle className="size-3.5" />
-                  Save Changes
+                  {saving ? "Saving…" : "Save Changes"}
                 </button>
                 <button
                   onClick={handleCancel}
-                  className="px-3 py-1.5 text-[13px] font-medium text-gray-600 rounded-lg hover:bg-gray-100 transition-colors"
+                  disabled={saving}
+                  className="px-3 py-1.5 text-[13px] font-medium text-gray-600 rounded-lg hover:bg-gray-100 transition-colors disabled:opacity-50"
                 >
                   Cancel
                 </button>
+                {saveError && (
+                  <span className="flex items-center gap-1 text-[12px] text-red-600 ml-1">
+                    <AlertCircle className="size-3.5 shrink-0" />
+                    {saveError}
+                  </span>
+                )}
               </>
             )}
           </div>
