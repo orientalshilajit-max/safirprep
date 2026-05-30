@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import {
   Search, SlidersHorizontal, Plus, Pencil, Archive, Trash2,
-  Truck, PackageCheck, PackageOpen, AlertTriangle,
+  Truck, PackageCheck, PackageOpen, AlertTriangle, AlertCircle,
   ChevronLeft, ChevronRight,
 } from "lucide-react"
 import { useRole, useShipments, useProducts, useIsMockMode } from "@/components/layout/app-shell"
@@ -38,6 +38,12 @@ export default function ShipmentsPage() {
   const [page,         setPage]         = useState(1)
   const [createOpen,   setCreateOpen]   = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Shipment | null>(null)
+  const [actionError,  setActionError]  = useState<string | null>(null)
+
+  function flashError(msg: string) {
+    setActionError(msg)
+    setTimeout(() => setActionError(null), 4000)
+  }
 
   // Client list for admin's Create Shipment selector (Supabase mode only)
   const [pageClients, setPageClients] = useState<{ id: string; name: string }[]>([])
@@ -99,7 +105,7 @@ export default function ShipmentsPage() {
       await archiveShipment(id)
       setShipments((prev) => prev.map((s) => (s.id === id ? { ...s, isArchived: true } : s)))
     } catch (err) {
-      console.error("[ShipmentsPage] archiveShipment failed:", err)
+      flashError(err instanceof Error ? err.message : "Failed to archive shipment.")
     }
   }
 
@@ -111,7 +117,7 @@ export default function ShipmentsPage() {
     try {
       await softDeleteShipment(id)
       setShipments((prev) => prev.filter((s) => s.id !== id))
-      // Also reverse the incoming_units in context (action already reversed DB)
+      // Reverse the incoming_units in context (action already reversed DB)
       const deleted = shipments.find((s) => s.id === id)
       if (deleted && !deleted.isInventoryUpdated) {
         setProducts((prev) =>
@@ -122,7 +128,7 @@ export default function ShipmentsPage() {
         )
       }
     } catch (err) {
-      console.error("[ShipmentsPage] softDeleteShipment failed:", err)
+      flashError(err instanceof Error ? err.message : "Failed to delete shipment.")
     }
   }
 
@@ -273,6 +279,14 @@ export default function ShipmentsPage() {
           Create Shipment
         </button>
       </div>
+
+      {/* Action error banner */}
+      {actionError && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-4 py-3">
+          <AlertCircle className="size-4 text-red-500 mt-0.5 shrink-0" />
+          <p className="text-[13px] text-red-600">{actionError}</p>
+        </div>
+      )}
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

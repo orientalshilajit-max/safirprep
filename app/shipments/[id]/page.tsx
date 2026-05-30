@@ -3,10 +3,11 @@
 import { useState, useRef } from "react"
 import { useParams, useRouter } from "next/navigation"
 import { ArrowLeft, Plus, X, Save, Paperclip, FileText, File, Archive, AlertCircle } from "lucide-react"
-import { useRole, useProducts, useShipments, useFiles, useIsMockMode } from "@/components/layout/app-shell"
+import { useRole, useProducts, useShipments, useFiles, useIsMockMode, useAuthUser } from "@/components/layout/app-shell"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { CARRIERS } from "@/lib/types"
 import { updateShipment } from "@/app/shipments/actions"
+import { uploadFile } from "@/app/files/actions"
 import type { Shipment, ShipmentProduct, ShipmentTracking, ShipmentStatus, FileDoc } from "@/lib/types"
 
 const STATUSES: ShipmentStatus[] = [
@@ -24,13 +25,16 @@ const uid = () => Math.random().toString(36).slice(2)
 export default function EditShipmentPage() {
   const params   = useParams<{ id: string }>()
   const router   = useRouter()
-  const { role } = useRole()
-  const { products }             = useProducts()
+  const { role }   = useRole()
+  const authUser   = useAuthUser()
+  const { products }              = useProducts()
   const { shipments, setShipments } = useShipments()
-  const { setProducts }          = useProducts()
-  const { files, setFiles }      = useFiles()
-  const isMockMode               = useIsMockMode()
-  const fileInputRef             = useRef<HTMLInputElement>(null)
+  const { setProducts }           = useProducts()
+  const { files, setFiles }       = useFiles()
+  const isMockMode                = useIsMockMode()
+  const fileInputRef              = useRef<HTMLInputElement>(null)
+  const [uploadingFile,  setUploadingFile]  = useState(false)
+  const [uploadError,    setUploadError]    = useState<string | null>(null)
 
   const shipment = shipments.find((s) => s.id === params.id)
 
@@ -175,7 +179,7 @@ export default function EditShipmentPage() {
     }
   }
 
-  /* ── Shipment files (mock only — Files not connected yet) ── */
+  /* ── Shipment files ──────────────────────────────────────── */
   const shipmentFiles = files.filter(
     (f) => f.relatedType === "shipment" && f.relatedId === params.id
   )
@@ -184,32 +188,55 @@ export default function EditShipmentPage() {
     fileInputRef.current?.click()
   }
 
-  function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleFileInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file || !shipment) return
-    const ext    = file.name.split(".").pop()?.toLowerCase() ?? "bin"
-    const sizeFmt =
-      file.size < 1024 * 1024
+    e.target.value = ""
+    setUploadError(null)
+
+    if (isMockMode) {
+      // Mock mode: add to local context only
+      const ext     = file.name.split(".").pop()?.toLowerCase() ?? "bin"
+      const sizeFmt = file.size < 1024 * 1024
         ? `${Math.round(file.size / 1024)} KB`
         : `${(file.size / 1024 / 1024).toFixed(1)} MB`
-    const newDoc: FileDoc = {
-      id:          `fd-ship-${Date.now()}`,
-      name:        file.name,
-      ext,
-      size:        sizeFmt,
-      category:    "Shipment Docs",
-      relatedTo:   shipment.shipmentNumber,
-      relatedType: "shipment",
-      relatedId:   shipment.id,
-      clientId:    shipment.clientId,
-      clientName:  shipment.clientName,
-      uploadedBy:  role === "admin" ? "Safir WMS" : shipment.clientName,
-      uploadedAt:  new Date().toLocaleDateString("en-US", {
-        month: "short", day: "numeric", year: "numeric",
-      }),
+      const newDoc: FileDoc = {
+        id:          `fd-ship-${Date.now()}`,
+        name:        file.name,
+        ext,
+        size:        sizeFmt,
+        category:    "Shipment Docs",
+        relatedTo:   shipment.shipmentNumber,
+        relatedType: "shipment",
+        relatedId:   shipment.id,
+        clientId:    shipment.clientId,
+        clientName:  shipment.clientName,
+        uploadedBy:  role === "admin" ? "Safir WMS" : shipment.clientName,
+        uploadedAt:  new Date().toLocaleDateString("en-US", {
+          month: "short", day: "numeric", year: "numeric",
+        }),
+      }
+      setFiles((prev) => [newDoc, ...prev])
+      return
     }
-    setFiles((prev) => [newDoc, ...prev])
-    e.target.value = ""
+
+    // Supabase mode: upload to storage + insert DB record
+    setUploadingFile(true)
+    try {
+      const formData = new FormData()
+      formData.set("file",       file)
+      formData.set("clientId",   shipment.clientId)
+      formData.set("category",   "Shipment Docs")
+      formData.set("shipmentId", shipment.id)
+      formData.set("uploadedBy", authUser?.displayName ?? (role === "admin" ? "Admin" : shipment.clientName))
+
+      const doc = await uploadFile(formData)
+      setFiles((prev) => [doc, ...prev])
+    } catch (err) {
+      setUploadError(err instanceof Error ? err.message : "File upload failed.")
+    } finally {
+      setUploadingFile(false)
+    }
   }
 
   function fileIcon(ext: string) {
@@ -534,13 +561,20 @@ export default function EditShipmentPage() {
           <button
             type="button"
             onClick={handleAttachFile}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors"
+            disabled={uploadingFile}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
           >
             <Paperclip className="size-3.5" />
-            Attach File
+            {uploadingFile ? "Uploading…" : "Attach File"}
           </button>
           <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileInputChange} />
         </div>
+        {uploadError && (
+          <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5">
+            <AlertCircle className="size-3.5 text-red-500 mt-0.5 shrink-0" />
+            <p className="text-[12px] text-red-600">{uploadError}</p>
+          </div>
+        )}
         {shipmentFiles.length === 0 ? (
           <div className="py-8 text-center">
             <p className="text-[13px] text-gray-400">No files attached to this shipment.</p>

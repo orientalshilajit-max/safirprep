@@ -1,16 +1,17 @@
 "use server"
 
 import { createSupabaseServerClient } from "@/lib/supabase-server"
+import { createServerAdminClient }     from "@/lib/supabase"
 import type { Shipment, ShipmentStatus } from "@/lib/types"
 
 // ── Status mapping ────────────────────────────────────────────
 
 const TO_DB: Record<ShipmentStatus, string> = {
-  "In Transit":        "in_transit",
-  "Arrived":           "arrived",
-  "Received":          "received",
-  "Partially Received":"partially_received",
-  "Need Attention":    "need_attention",
+  "In Transit":         "in_transit",
+  "Arrived":            "arrived",
+  "Received":           "received",
+  "Partially Received": "partially_received",
+  "Need Attention":     "need_attention",
 }
 
 const FROM_DB: Record<string, ShipmentStatus> = {
@@ -28,13 +29,13 @@ const RECEIVED_DB = ["received", "partially_received"]
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapRow(row: any): Shipment {
   return {
-    id: row.id,
+    id:             row.id,
     shipmentNumber: row.shipment_number,
-    clientId: row.client_id,
-    clientName: row.clients?.company_name ?? "",
-    status: FROM_DB[row.status] ?? "In Transit",
-    notes: row.notes ?? "",
-    isArchived: row.archived_at != null,
+    clientId:       row.client_id,
+    clientName:     row.clients?.company_name ?? "",
+    status:         FROM_DB[row.status] ?? "In Transit",
+    notes:          row.notes ?? "",
+    isArchived:     row.archived_at != null,
     isInventoryUpdated: row.inventory_synced,
     createdAt: new Date(row.created_at).toLocaleDateString("en-US", {
       month: "short", day: "numeric", year: "numeric",
@@ -48,14 +49,14 @@ function mapRow(row: any): Shipment {
       notes: string | null
       products: { name: string; sku: string } | null
     }) => ({
-      id: item.id,
-      productId: item.product_id,
-      productName: item.products?.name ?? "",
-      sku: item.products?.sku ?? "",
-      units: item.expected_units,
+      id:           item.id,
+      productId:    item.product_id,
+      productName:  item.products?.name ?? "",
+      sku:          item.products?.sku  ?? "",
+      units:        item.expected_units,
       receivedUnits: item.received_units,
-      damagedUnits: item.damaged_units,
-      notes: item.notes ?? "",
+      damagedUnits:  item.damaged_units,
+      notes:         item.notes ?? "",
     })),
     tracking: (row.shipment_trackings ?? []).map((t: {
       id: string
@@ -64,11 +65,11 @@ function mapRow(row: any): Shipment {
       box_count: number
       notes: string | null
     }) => ({
-      id: t.id,
-      carrier: t.carrier,
+      id:             t.id,
+      carrier:        t.carrier,
       trackingNumber: t.tracking_number ?? "",
-      boxCount: t.box_count,
-      notes: t.notes ?? "",
+      boxCount:       t.box_count,
+      notes:          t.notes ?? "",
     })),
   }
 }
@@ -81,18 +82,21 @@ const SHIPMENT_SELECT = `
 ` as const
 
 // ── Inventory helper ──────────────────────────────────────────
+// Always uses the service-role admin client so that:
+//   • Clients can adjust their own inventory (no client UPDATE RLS policy exists)
+//   • Admins bypass the RLS check as well (consistent path)
+// Ownership is always verified via the user's session BEFORE calling this.
 
-type Supa = Awaited<ReturnType<typeof createSupabaseServerClient>>
-
-async function adjustIncoming(supa: Supa, productId: string, delta: number) {
+async function adjustIncoming(productId: string, delta: number) {
   if (delta === 0) return
-  const { data: inv } = await supa
+  const admin = createServerAdminClient()
+  const { data: inv } = await admin
     .from("inventory")
     .select("id, incoming_units")
     .eq("product_id", productId)
     .maybeSingle()
   if (!inv) return
-  await supa
+  await admin
     .from("inventory")
     .update({ incoming_units: Math.max(0, inv.incoming_units + delta) })
     .eq("id", inv.id)
@@ -137,7 +141,7 @@ export async function createShipment(input: CreateInput): Promise<Shipment> {
     )
   }
 
-  // Generate shipment number by checking the last 20 records
+  // Generate shipment number
   const { data: recent } = await supabase
     .from("incoming_shipments")
     .select("shipment_number")
@@ -150,54 +154,55 @@ export async function createShipment(input: CreateInput): Promise<Shipment> {
     if (n > maxNum) maxNum = n
   }
 
-  // Insert shipment
+  // Insert shipment (user session — RLS enforces ownership)
   const { data: ship, error: sErr } = await supabase
     .from("incoming_shipments")
     .insert({
-      client_id: clientId,
+      client_id:       clientId,
       shipment_number: `IN-${maxNum + 1}`,
-      status: "in_transit",
-      notes: input.notes.trim() || null,
+      status:          "in_transit",
+      notes:           input.notes.trim() || null,
     })
     .select("id")
     .single()
   if (sErr) throw new Error(sErr.message)
 
   const validProducts = input.products.filter((p) => p.productId && p.units > 0)
-  const validTracking = input.tracking.filter((t) => t.carrier)
+  const validTracking  = input.tracking.filter((t) => t.carrier)
 
-  // Insert items
+  // Use admin client for child records to avoid RLS gaps on INSERT for clients
+  const admin = createServerAdminClient()
+
   if (validProducts.length) {
-    const { error: iErr } = await supabase.from("incoming_shipment_items").insert(
+    const { error: iErr } = await admin.from("incoming_shipment_items").insert(
       validProducts.map((p) => ({
-        shipment_id: ship.id,
-        product_id: p.productId,
+        shipment_id:    ship.id,
+        product_id:     p.productId,
         expected_units: p.units,
         received_units: 0,
-        damaged_units: 0,
-        notes: p.notes.trim() || null,
+        damaged_units:  0,
+        notes:          p.notes.trim() || null,
       }))
     )
     if (iErr) throw new Error(iErr.message)
   }
 
-  // Insert tracking
   if (validTracking.length) {
-    const { error: tErr } = await supabase.from("shipment_trackings").insert(
+    const { error: tErr } = await admin.from("shipment_trackings").insert(
       validTracking.map((t) => ({
-        shipment_id: ship.id,
-        carrier: t.carrier,
+        shipment_id:     ship.id,
+        carrier:         t.carrier,
         tracking_number: t.trackingNumber.trim() || null,
-        box_count: t.boxCount,
-        notes: t.notes.trim() || null,
+        box_count:       t.boxCount,
+        notes:           t.notes.trim() || null,
       }))
     )
     if (tErr) throw new Error(tErr.message)
   }
 
-  // Increment inventory.incoming_units for each product
+  // Reflect expected units in incoming_units
   for (const p of validProducts) {
-    await adjustIncoming(supabase, p.productId, p.units)
+    await adjustIncoming(p.productId, p.units)
   }
 
   const { data: full, error: fErr } = await supabase
@@ -236,7 +241,7 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
   if (!user) throw new Error("Unauthorized")
   const isAdmin = user.app_metadata?.role === "admin"
 
-  // Load current state to compute inventory diffs and guard against double-sync
+  // Verify ownership + load current state (user session, RLS-filtered)
   const { data: current, error: gErr } = await supabase
     .from("incoming_shipments")
     .select("status, inventory_synced, incoming_shipment_items(product_id, expected_units)")
@@ -248,81 +253,80 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
   const currentDbStatus = current.status as DbStatus
   const inventorySynced = current.inventory_synced as boolean
 
-  // Clients cannot change status
   const newDbStatus: DbStatus = isAdmin
     ? (TO_DB[input.status] as DbStatus)
-    : currentDbStatus
+    : currentDbStatus   // clients cannot change status
 
-  const wasReceived = RECEIVED_DB.includes(currentDbStatus)
-  const nowReceived = RECEIVED_DB.includes(newDbStatus)
-  // Inventory sync fires only once: admin, first time transitioning to received
+  const wasReceived    = RECEIVED_DB.includes(currentDbStatus)
+  const nowReceived    = RECEIVED_DB.includes(newDbStatus)
   const doInventorySync = isAdmin && !inventorySynced && nowReceived && !wasReceived
 
-  // Update the shipment record
+  // Update the shipment row (user session — RLS restricts clients to non-received only)
   const { error: uErr } = await supabase
     .from("incoming_shipments")
     .update({
       status: newDbStatus,
-      notes: input.notes.trim() || null,
+      notes:  input.notes.trim() || null,
       ...(doInventorySync ? { inventory_synced: true } : {}),
     })
     .eq("id", id)
   if (uErr) throw new Error(uErr.message)
 
-  // Snapshot old items before replacing them
   const oldItems = (
     current.incoming_shipment_items as { product_id: string; expected_units: number }[]
   ) ?? []
 
-  // Replace items: delete all → re-insert
-  const { error: dItemErr } = await supabase
+  const validProducts = input.products.filter((p) => p.productId && p.units > 0)
+  const validTracking  = input.tracking.filter((t) => t.carrier)
+
+  // Admin client for child-record operations: no client DELETE RLS exists,
+  // and ownership is already verified by the select above.
+  const admin = createServerAdminClient()
+
+  // Replace items
+  const { error: dItemErr } = await admin
     .from("incoming_shipment_items")
     .delete()
     .eq("shipment_id", id)
   if (dItemErr) throw new Error(dItemErr.message)
 
-  const validProducts = input.products.filter((p) => p.productId && p.units > 0)
-
   if (validProducts.length) {
-    const { error: insItemErr } = await supabase.from("incoming_shipment_items").insert(
+    const { error: insItemErr } = await admin.from("incoming_shipment_items").insert(
       validProducts.map((p) => ({
-        shipment_id: id,
-        product_id: p.productId,
+        shipment_id:    id,
+        product_id:     p.productId,
         expected_units: p.units,
-        // Clients cannot set received/damaged counts
         received_units: isAdmin ? p.receivedUnits : 0,
         damaged_units:  isAdmin ? p.damagedUnits  : 0,
-        notes: p.notes.trim() || null,
+        notes:          p.notes.trim() || null,
       }))
     )
     if (insItemErr) throw new Error(insItemErr.message)
   }
 
-  // Replace tracking: delete all → re-insert
-  const { error: dTrackErr } = await supabase
+  // Replace tracking
+  const { error: dTrackErr } = await admin
     .from("shipment_trackings")
     .delete()
     .eq("shipment_id", id)
   if (dTrackErr) throw new Error(dTrackErr.message)
 
-  const validTracking = input.tracking.filter((t) => t.carrier)
   if (validTracking.length) {
-    const { error: insTrackErr } = await supabase.from("shipment_trackings").insert(
+    const { error: insTrackErr } = await admin.from("shipment_trackings").insert(
       validTracking.map((t) => ({
-        shipment_id: id,
-        carrier: t.carrier,
+        shipment_id:     id,
+        carrier:         t.carrier,
         tracking_number: t.trackingNumber.trim() || null,
-        box_count: t.boxCount,
-        notes: t.notes.trim() || null,
+        box_count:       t.boxCount,
+        notes:           t.notes.trim() || null,
       }))
     )
     if (insTrackErr) throw new Error(insTrackErr.message)
   }
 
-  // ── Inventory adjustments (only while not yet synced) ────────
+  // ── Inventory adjustments ─────────────────────────────────
 
   if (!inventorySynced) {
-    // Build product-level expected_units maps: old (from DB) vs new (from input)
     const oldMap: Record<string, number> = {}
     for (const item of oldItems) {
       oldMap[item.product_id] = (oldMap[item.product_id] ?? 0) + item.expected_units
@@ -331,26 +335,24 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
     for (const p of validProducts) {
       newMap[p.productId] = (newMap[p.productId] ?? 0) + p.units
     }
-
     const allIds = new Set([...Object.keys(oldMap), ...Object.keys(newMap)])
 
     if (doInventorySync) {
-      // Receive sync: remove the old incoming amount that was posted on create/edit,
-      // then add received and damaged to their respective buckets.
+      // Receive sync: subtract old incoming, add received + damaged
       for (const productId of allIds) {
         const oldExpected = oldMap[productId] ?? 0
         const newItem     = validProducts.find((p) => p.productId === productId)
         const received    = isAdmin && newItem ? newItem.receivedUnits : 0
         const damaged     = isAdmin && newItem ? newItem.damagedUnits  : 0
 
-        const { data: inv } = await supabase
+        const { data: inv } = await admin
           .from("inventory")
           .select("id, incoming_units, available_units, damaged_units")
           .eq("product_id", productId)
           .maybeSingle()
 
         if (inv) {
-          await supabase
+          await admin
             .from("inventory")
             .update({
               incoming_units:  Math.max(0, inv.incoming_units - oldExpected),
@@ -361,10 +363,10 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
         }
       }
     } else {
-      // Pre-receive edit: adjust incoming_units by the diff in expected quantities
+      // Pre-receive edit: adjust incoming_units by the diff
       for (const productId of allIds) {
         const delta = (newMap[productId] ?? 0) - (oldMap[productId] ?? 0)
-        await adjustIncoming(supabase, productId, delta)
+        await adjustIncoming(productId, delta)
       }
     }
   }
@@ -379,10 +381,24 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
 }
 
 // ── archiveShipment ───────────────────────────────────────────
+// Sets archived_at. Uses admin client to bypass the "clients cannot
+// update received shipments" RLS restriction — but first verifies
+// the caller can actually see this shipment via their own session.
 
 export async function archiveShipment(id: string): Promise<void> {
   const supabase = await createSupabaseServerClient()
-  const { error } = await supabase
+
+  // Ownership check: user session is RLS-filtered
+  const { data: ship, error: gErr } = await supabase
+    .from("incoming_shipments")
+    .select("id")
+    .eq("id", id)
+    .maybeSingle()
+  if (gErr) throw new Error(gErr.message)
+  if (!ship) throw new Error("Shipment not found or access denied.")
+
+  const admin = createServerAdminClient()
+  const { error } = await admin
     .from("incoming_shipments")
     .update({ archived_at: new Date().toISOString() })
     .eq("id", id)
@@ -395,7 +411,6 @@ export async function archiveShipment(id: string): Promise<void> {
 export async function softDeleteShipment(id: string): Promise<void> {
   const supabase = await createSupabaseServerClient()
 
-  // Load items to reverse incoming_units (only if inventory not yet synced)
   const { data: current } = await supabase
     .from("incoming_shipments")
     .select("inventory_synced, incoming_shipment_items(product_id, expected_units)")
@@ -408,10 +423,11 @@ export async function softDeleteShipment(id: string): Promise<void> {
       expected_units: number
     }[]
     for (const item of items) {
-      await adjustIncoming(supabase, item.product_id, -item.expected_units)
+      await adjustIncoming(item.product_id, -item.expected_units)
     }
   }
 
+  // User session: RLS allows clients to soft-delete their own non-received shipments
   const { error } = await supabase
     .from("incoming_shipments")
     .update({ deleted_at: new Date().toISOString() })
