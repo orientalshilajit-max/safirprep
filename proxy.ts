@@ -62,6 +62,8 @@ export async function proxy(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
+  console.log(`[Proxy] ${pathname} — session: ${user ? "yes (" + user.id + ")" : "no"}`)
+
   const isPublicPath = PUBLIC_PATHS.some((p) => pathname.startsWith(p))
 
   // ── 5. Route decisions ─────────────────────────────────────────────
@@ -72,11 +74,13 @@ export async function proxy(request: NextRequest) {
     if (pathname !== "/") {
       loginUrl.searchParams.set("redirect", pathname)
     }
+    console.log(`[Proxy] no session → redirecting to ${loginUrl.pathname}${loginUrl.search}`)
     return NextResponse.redirect(loginUrl)
   }
 
   // Authenticated + /login → redirect to /dashboard
   if (user && isPublicPath) {
+    console.log(`[Proxy] authenticated on public path → redirecting to /dashboard`)
     return NextResponse.redirect(new URL("/dashboard", request.url))
   }
 

@@ -14,6 +14,7 @@
 // ============================================================
 
 import { createClient, type SupabaseClient } from "@supabase/supabase-js"
+import { createBrowserClient as createSSRBrowserClient } from "@supabase/ssr"
 import type { Database } from "./database.types"
 
 // ── Configuration check ───────────────────────────────────────
@@ -28,9 +29,10 @@ export function isSupabaseConfigured(): boolean {
 }
 
 // ── Browser / client-side client ─────────────────────────────
-// Singleton — safe to call in any client component.
-// Uses the anon key; all access control is enforced via RLS.
-// Returns null when Supabase is not configured (mock/dev mode).
+// Uses @supabase/ssr's createBrowserClient so the session is stored
+// in cookies rather than localStorage.  This makes the session
+// visible to proxy.ts (which reads request cookies server-side),
+// breaking the redirect loop that occurred when localStorage was used.
 
 let _browserClient: SupabaseClient<Database> | null = null
 
@@ -48,13 +50,7 @@ export function createBrowserClient(): SupabaseClient<Database> {
     )
   }
 
-  _browserClient = createClient<Database>(url, key, {
-    auth: {
-      persistSession: true,
-      autoRefreshToken: true,
-      detectSessionInUrl: true,
-    },
-  })
+  _browserClient = createSSRBrowserClient<Database>(url, key)
 
   return _browserClient
 }

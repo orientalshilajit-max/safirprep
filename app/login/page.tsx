@@ -34,13 +34,13 @@ function LoginForm() {
 
     try {
       const supabase = createBrowserClient()
-      const { error: authError } = await supabase.auth.signInWithPassword({
+      const { data, error: authError } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
       })
 
       if (authError) {
-        // Surface friendly messages for common cases
+        console.log("[Login] error:", authError.message)
         if (authError.message.toLowerCase().includes("invalid login")) {
           setError("Incorrect email or password.")
         } else if (authError.message.toLowerCase().includes("email not confirmed")) {
@@ -51,8 +51,15 @@ function LoginForm() {
         return
       }
 
-      // Success — navigate to the intended page and let middleware
-      // refresh the session cookie before the next render.
+      console.log("[Login] success — session exists:", !!data.session)
+
+      if (!data.session) {
+        console.log("[Login] no session returned — aborting navigation")
+        setError("Sign-in succeeded but no session was created. Please try again.")
+        return
+      }
+
+      console.log("[Login] navigating to", redirect)
       router.push(redirect)
       router.refresh()
     } catch {
