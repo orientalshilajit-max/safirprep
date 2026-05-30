@@ -6,7 +6,7 @@ import {
   Mail, MailCheck, KeyRound,
   Users, UserCheck, UserX, UserPlus,
   ChevronLeft, ChevronRight,
-  AlertCircle,
+  AlertCircle, Archive, ArchiveRestore,
 } from "lucide-react"
 import { useRole, useClients, useIsMockMode } from "@/components/layout/app-shell"
 import { DataTable } from "@/components/ui/data-table"
@@ -20,6 +20,9 @@ import {
   createClient,
   updateClient,
   archiveClient,
+  listArchivedClients,
+  restoreClient,
+  deleteClientPermanently,
   sendInvite,
   resetPassword,
 } from "@/app/clients/actions"
@@ -55,17 +58,32 @@ export default function ClientsPage() {
   const [search,       setSearch]       = useState("")
   const [statusFilter, setStatusFilter] = useState<ClientStatus | "all">("all")
   const [page,         setPage]         = useState(1)
+  const [activeTab,    setActiveTab]    = useState<"active" | "archived">("active")
   const [modalOpen,    setModalOpen]    = useState(false)
   const [editing,      setEditing]      = useState<Client | null>(null)
-  const [deleteTarget, setDeleteTarget] = useState<Client | null>(null)
+  const [archiveTarget,         setArchiveTarget]         = useState<Client | null>(null)
+  const [permanentDeleteTarget, setPermanentDeleteTarget] = useState<Client | null>(null)
   const [inviteSent,   setInviteSent]   = useState<string | null>(null)
   const [actionError,  setActionError]  = useState<string | null>(null)
 
-  // All hooks before conditional return
-  const visible  = clients.filter((c) => !c.isArchived)
+  // Archived clients — loaded lazily in Supabase mode
+  const [archivedClients, setArchivedClients] = useState<Client[]>([])
+  const [archivedLoaded,  setArchivedLoaded]  = useState(false)
+  const [archivedLoading, setArchivedLoading] = useState(false)
+
+  // Active clients = non-archived entries in context
+  const visible = clients.filter((c) => !c.isArchived)
+
+  // Data for the current tab
+  const currentTabData = activeTab === "active"
+    ? visible
+    : isMockMode
+      ? clients.filter((c) => c.isArchived)
+      : archivedClients
+
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
-    return visible.filter((c) => {
+    return currentTabData.filter((c) => {
       const matchSearch =
         !q ||
         c.companyName.toLowerCase().includes(q) ||
@@ -74,7 +92,7 @@ export default function ClientsPage() {
       const matchStatus = statusFilter === "all" || c.status === statusFilter
       return matchSearch && matchStatus
     })
-  }, [visible, search, statusFilter])
+  }, [currentTabData, search, statusFilter])
 
   /* Non-admin gate — after all hooks */
   if (role !== "admin") {
@@ -89,7 +107,7 @@ export default function ClientsPage() {
     )
   }
 
-  /* ── Stat counts ──────────────────────────────────────── */
+  /* ── Stat counts (always based on active clients) ─────────── */
   const counts = {
     active:   visible.filter((c) => c.status === "Active").length,
     pending:  visible.filter((c) => c.status === "Pending").length,
@@ -101,7 +119,7 @@ export default function ClientsPage() {
   const safePage   = Math.min(page, totalPages)
   const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
-  /* ── Helpers ──────────────────────────────────────────── */
+  /* ── Helpers ──────────────────────────────────────────────── */
   function openCreate() { setEditing(null); setModalOpen(true) }
   function openEdit(c: Client) { setEditing(c); setModalOpen(true) }
 
@@ -110,7 +128,25 @@ export default function ClientsPage() {
     setTimeout(() => setActionError(null), 4000)
   }
 
-  /* ── Save ─────────────────────────────────────────────── */
+  /* ── Tab switch ───────────────────────────────────────────── */
+  async function handleTabChange(tab: "active" | "archived") {
+    setActiveTab(tab)
+    setPage(1)
+    if (tab === "archived" && !archivedLoaded && !isMockMode) {
+      setArchivedLoading(true)
+      try {
+        const data = await listArchivedClients()
+        setArchivedClients(data)
+        setArchivedLoaded(true)
+      } catch (err) {
+        flashError(err instanceof Error ? err.message : "Failed to load archived clients.")
+      } finally {
+        setArchivedLoading(false)
+      }
+    }
+  }
+
+  /* ── Save ─────────────────────────────────────────────────── */
   async function handleSave(data: ClientFormData) {
     if (isMockMode) {
       if (editing) {
@@ -133,7 +169,6 @@ export default function ClientsPage() {
       return
     }
 
-    // Supabase mode — throws on error (ClientModal catches and shows it)
     if (editing) {
       const updated = await updateClient(editing.id, data)
       setClients((prev) => prev.map((c) => c.id === editing.id ? updated : c))
@@ -144,23 +179,55 @@ export default function ClientsPage() {
     setModalOpen(false)
   }
 
-  /* ── Archive / delete ─────────────────────────────────── */
-  async function handleDelete(c: Client) {
+  /* ── Archive ──────────────────────────────────────────────── */
+  async function handleArchive(c: Client) {
     if (isMockMode) {
-      setClients((prev) => prev.map((x) => (x.id === c.id ? { ...x, isArchived: true } : x)))
-      setDeleteTarget(null)
+      setClients((prev) => prev.map((x) => x.id === c.id ? { ...x, isArchived: true } : x))
+      setArchiveTarget(null)
       return
     }
     try {
       await archiveClient(c.id)
       setClients((prev) => prev.filter((x) => x.id !== c.id))
+      setArchivedLoaded(false)
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to archive client.")
     }
-    setDeleteTarget(null)
+    setArchiveTarget(null)
   }
 
-  /* ── Send / resend invite ─────────────────────────────── */
+  /* ── Restore ──────────────────────────────────────────────── */
+  async function handleRestore(c: Client) {
+    if (isMockMode) {
+      setClients((prev) => prev.map((x) => x.id === c.id ? { ...x, isArchived: false } : x))
+      return
+    }
+    try {
+      const restored = await restoreClient(c.id)
+      setArchivedClients((prev) => prev.filter((x) => x.id !== c.id))
+      setClients((prev) => [restored, ...prev])
+    } catch (err) {
+      flashError(err instanceof Error ? err.message : "Failed to restore client.")
+    }
+  }
+
+  /* ── Permanent delete ─────────────────────────────────────── */
+  async function handlePermanentDelete(c: Client) {
+    if (isMockMode) {
+      setClients((prev) => prev.filter((x) => x.id !== c.id))
+      setPermanentDeleteTarget(null)
+      return
+    }
+    try {
+      await deleteClientPermanently(c.id)
+      setArchivedClients((prev) => prev.filter((x) => x.id !== c.id))
+    } catch (err) {
+      flashError(err instanceof Error ? err.message : "Failed to delete client.")
+    }
+    setPermanentDeleteTarget(null)
+  }
+
+  /* ── Send / resend invite ─────────────────────────────────── */
   async function handleSendInvite(c: Client) {
     if (isMockMode) {
       setClients((prev) =>
@@ -190,12 +257,12 @@ export default function ClientsPage() {
     }
   }
 
-  /* ── Reset password ───────────────────────────────────── */
+  /* ── Reset password ───────────────────────────────────────── */
   async function handleResetPassword(c: Client) {
     if (isMockMode) return
     try {
       await resetPassword(c.id)
-      setInviteSent(c.id) // reuse the "sent" flash for visual feedback
+      setInviteSent(c.id)
       setTimeout(() => setInviteSent(null), 2500)
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to send password reset.")
@@ -207,8 +274,7 @@ export default function ClientsPage() {
     setPage(1)
   }
 
-  /* ── Columns ──────────────────────────────────────────── */
-  const columns: DataTableColumn<Client>[] = [
+  const clientInfoColumns: DataTableColumn<Client>[] = [
     {
       id: "client",
       header: "Client",
@@ -275,6 +341,11 @@ export default function ClientsPage() {
         </span>
       ),
     },
+  ]
+
+  /* ── Active tab columns ───────────────────────────────────── */
+  const activeColumns: DataTableColumn<Client>[] = [
+    ...clientInfoColumns,
     {
       id: "actions",
       header: "Actions",
@@ -284,12 +355,10 @@ export default function ClientsPage() {
         const justSent = inviteSent === row.id
         return (
           <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-            {/* Edit */}
             <IconButton variant="primary" title="Edit Client" onClick={() => openEdit(row)}>
               <Pencil className="size-3.5" />
             </IconButton>
 
-            {/* Send invite — only if No Login */}
             {row.loginStatus === "No Login" && (
               <IconButton
                 variant="primary"
@@ -301,7 +370,6 @@ export default function ClientsPage() {
               </IconButton>
             )}
 
-            {/* Resend invite — only if Invited */}
             {row.loginStatus === "Invited" && (
               <IconButton
                 variant="primary"
@@ -313,7 +381,6 @@ export default function ClientsPage() {
               </IconButton>
             )}
 
-            {/* Reset password — only if Active login */}
             {row.loginStatus === "Active" && (
               <IconButton
                 variant="default"
@@ -325,13 +392,12 @@ export default function ClientsPage() {
               </IconButton>
             )}
 
-            {/* Archive */}
             <IconButton
               variant="danger"
-              title="Remove Client"
-              onClick={() => setDeleteTarget(row)}
+              title="Archive Client"
+              onClick={() => setArchiveTarget(row)}
             >
-              <Trash2 className="size-3.5" />
+              <Archive className="size-3.5" />
             </IconButton>
           </div>
         )
@@ -339,7 +405,32 @@ export default function ClientsPage() {
     },
   ]
 
-  /* ── Render ───────────────────────────────────────────── */
+  /* ── Archived tab columns ─────────────────────────────────── */
+  const archivedColumns: DataTableColumn<Client>[] = [
+    ...clientInfoColumns,
+    {
+      id: "actions",
+      header: "Actions",
+      headerClassName: "text-right w-24",
+      className: "text-right w-24",
+      cell: (row) => (
+        <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <IconButton variant="primary" title="Restore Client" onClick={() => handleRestore(row)}>
+            <ArchiveRestore className="size-3.5" />
+          </IconButton>
+          <IconButton
+            variant="danger"
+            title="Delete Permanently"
+            onClick={() => setPermanentDeleteTarget(row)}
+          >
+            <Trash2 className="size-3.5" />
+          </IconButton>
+        </div>
+      ),
+    },
+  ]
+
+  /* ── Render ───────────────────────────────────────────────── */
   return (
     <div className="flex flex-col gap-4 h-full">
       {/* Page header */}
@@ -350,13 +441,15 @@ export default function ClientsPage() {
             Manage client accounts and portal access
           </p>
         </div>
-        <button
-          onClick={openCreate}
-          className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm"
-        >
-          <Plus className="size-4" />
-          Add Client
-        </button>
+        {activeTab === "active" && (
+          <button
+            onClick={openCreate}
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm"
+          >
+            <Plus className="size-4" />
+            Add Client
+          </button>
+        )}
       </div>
 
       {/* Action error banner */}
@@ -403,6 +496,30 @@ export default function ClientsPage() {
 
       {/* Table card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden flex-1 min-h-0">
+        {/* Tabs */}
+        <div className="flex border-b border-gray-200 px-4">
+          <button
+            onClick={() => handleTabChange("active")}
+            className={`py-3 px-1 mr-4 text-[13px] font-medium border-b-2 -mb-px transition-colors ${
+              activeTab === "active"
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            Active
+          </button>
+          <button
+            onClick={() => handleTabChange("archived")}
+            className={`py-3 px-1 text-[13px] font-medium border-b-2 -mb-px transition-colors ${
+              activeTab === "archived"
+                ? "border-blue-600 text-blue-600"
+                : "border-transparent text-gray-500 hover:text-gray-700"
+            }`}
+          >
+            Archived
+          </button>
+        </div>
+
         {/* Toolbar */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-200">
           <div className="relative flex-1 max-w-sm">
@@ -430,32 +547,40 @@ export default function ClientsPage() {
 
         {/* Table */}
         <div className="flex-1 overflow-y-auto">
-          <DataTable
-            columns={columns}
-            data={paginated}
-            keyExtractor={(c) => c.id}
-            emptyState={
-              <EmptyState
-                title="No clients found"
-                description={
-                  search || statusFilter !== "all"
-                    ? "Try adjusting your search or filters."
-                    : "Add your first client to get started."
-                }
-                action={
-                  !search && statusFilter === "all" ? (
-                    <button
-                      onClick={openCreate}
-                      className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-[13px] font-semibold rounded-lg hover:bg-blue-700 transition-colors"
-                    >
-                      <Plus className="size-4" />
-                      Add Client
-                    </button>
-                  ) : undefined
-                }
-              />
-            }
-          />
+          {archivedLoading ? (
+            <div className="flex items-center justify-center h-32">
+              <div className="size-5 rounded-full border-2 border-blue-600 border-t-transparent animate-spin" />
+            </div>
+          ) : (
+            <DataTable
+              columns={activeTab === "active" ? activeColumns : archivedColumns}
+              data={paginated}
+              keyExtractor={(c) => c.id}
+              emptyState={
+                <EmptyState
+                  title={activeTab === "active" ? "No clients found" : "No archived clients"}
+                  description={
+                    search || statusFilter !== "all"
+                      ? "Try adjusting your search or filters."
+                      : activeTab === "active"
+                        ? "Add your first client to get started."
+                        : "Archived clients will appear here."
+                  }
+                  action={
+                    activeTab === "active" && !search && statusFilter === "all" ? (
+                      <button
+                        onClick={openCreate}
+                        className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-[13px] font-semibold rounded-lg hover:bg-blue-700 transition-colors"
+                      >
+                        <Plus className="size-4" />
+                        Add Client
+                      </button>
+                    ) : undefined
+                  }
+                />
+              }
+            />
+          )}
         </div>
 
         {/* Pagination */}
@@ -524,14 +649,25 @@ export default function ClientsPage() {
         client={editing}
       />
 
-      {/* Delete confirm */}
+      {/* Archive confirm */}
       <ConfirmModal
-        isOpen={!!deleteTarget}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={() => { if (deleteTarget) handleDelete(deleteTarget) }}
-        title="Remove Client"
-        message={`Remove ${deleteTarget?.companyName}? Their account will be archived and they will lose portal access.`}
-        confirmLabel="Remove"
+        isOpen={!!archiveTarget}
+        onClose={() => setArchiveTarget(null)}
+        onConfirm={() => { if (archiveTarget) handleArchive(archiveTarget) }}
+        title="Archive client?"
+        message="This client will be moved to Archive. Their history will be preserved."
+        confirmLabel="Archive Client"
+        variant="danger"
+      />
+
+      {/* Permanent delete confirm */}
+      <ConfirmModal
+        isOpen={!!permanentDeleteTarget}
+        onClose={() => setPermanentDeleteTarget(null)}
+        onConfirm={() => { if (permanentDeleteTarget) handlePermanentDelete(permanentDeleteTarget) }}
+        title="Delete client permanently?"
+        message="This will permanently delete the client from Supabase. This action cannot be undone. The email can be used again for a new client account."
+        confirmLabel="Delete Permanently"
         variant="danger"
       />
     </div>

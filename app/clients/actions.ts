@@ -157,6 +157,71 @@ export async function archiveClient(id: string): Promise<void> {
   if (error) throw new Error(error.message)
 }
 
+// ── listArchivedClients ───────────────────────────────────────
+
+export async function listArchivedClients(): Promise<Client[]> {
+  const { supabase } = await requireAdmin()
+  const { data, error } = await supabase
+    .from("clients")
+    .select(CLIENT_SELECT)
+    .not("deleted_at", "is", null)
+    .order("deleted_at", { ascending: false })
+  if (error) throw new Error(error.message)
+  return (data ?? []).map((r) => mapRow(r as unknown as DbClientRow))
+}
+
+// ── restoreClient ─────────────────────────────────────────────
+
+export async function restoreClient(id: string): Promise<Client> {
+  const { supabase } = await requireAdmin()
+  const { data, error } = await supabase
+    .from("clients")
+    .update({ deleted_at: null })
+    .eq("id", id)
+    .select(CLIENT_SELECT)
+    .single()
+  if (error) throw new Error(error.message)
+  return mapRow(data as unknown as DbClientRow)
+}
+
+// ── deleteClientPermanently ───────────────────────────────────
+
+export async function deleteClientPermanently(id: string): Promise<void> {
+  const { supabase } = await requireAdmin()
+  const adminClient  = createServerAdminClient()
+
+  const { data: client, error: gErr } = await supabase
+    .from("clients")
+    .select("id, auth_user_id")
+    .eq("id", id)
+    .single()
+  if (gErr) throw new Error(gErr.message)
+
+  const row = client as { id: string; auth_user_id: string | null }
+
+  if (row.auth_user_id) {
+    const { data: authData } = await adminClient.auth.admin.getUserById(row.auth_user_id)
+    if (authData?.user) {
+      if (authData.user.app_metadata?.role === "admin") {
+        throw new Error("Admin users cannot be deleted from Clients.")
+      }
+      const { error: delAuthErr } = await adminClient.auth.admin.deleteUser(row.auth_user_id)
+      if (delAuthErr) throw new Error(delAuthErr.message)
+    }
+  }
+
+  const { error: delErr } = await supabase
+    .from("clients")
+    .delete()
+    .eq("id", id)
+  if (delErr) {
+    if (delErr.code === "23503") {
+      throw new Error("This client has related records and cannot be permanently deleted until related data is removed.")
+    }
+    throw new Error(delErr.message)
+  }
+}
+
 // ── sendInvite ────────────────────────────────────────────────
 // Creates (or resends) a Supabase Auth invite for the client.
 //
