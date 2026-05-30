@@ -1,8 +1,9 @@
 "use client"
 
-import { useState } from "react"
-import { Upload, AlertCircle } from "lucide-react"
+import { useState, useRef } from "react"
+import { Upload, AlertCircle, X } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
+import { uploadProductImage } from "@/app/products/actions"
 import type { Product, ProductStatus, UserRole } from "@/lib/types"
 
 export type ProductFormData = {
@@ -33,6 +34,9 @@ const empty: ProductFormData = {
   damaged: 0,
 }
 
+const ALLOWED_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
+const MAX_BYTES     = 5 * 1024 * 1024 // 5 MB
+
 type ProductModalProps = {
   isOpen: boolean
   onClose: () => void
@@ -54,9 +58,15 @@ export function ProductModal({
   zIndex,
   clients = [],
 }: ProductModalProps) {
-  const [form, setForm] = useState<ProductFormData>(empty)
-  const [saving, setSaving] = useState(false)
+  const [form,      setForm]      = useState<ProductFormData>(empty)
+  const [saving,    setSaving]    = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+
+  // Image upload state
+  const [imageFile,    setImageFile]    = useState<File | null>(null)
+  const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [imageError,   setImageError]   = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   // Track the (isOpen, product) pair we last initialised the form for.
   const [prevKey, setPrevKey] = useState<string>("")
@@ -65,23 +75,25 @@ export function ProductModal({
   if (prevKey !== currentKey) {
     setPrevKey(currentKey)
     setSaveError(null)
+    setImageFile(null)
+    setImagePreview(null)
+    setImageError(null)
     if (product) {
       setForm({
-        name: product.name,
-        sku: product.sku,
-        asin: product.asin,
-        fnsku: product.fnsku,
-        notes: product.notes,
-        status: product.status,
-        image: product.image,
+        name:      product.name,
+        sku:       product.sku,
+        asin:      product.asin,
+        fnsku:     product.fnsku,
+        notes:     product.notes,
+        status:    product.status,
+        image:     product.image,
         available: product.available,
-        incoming: product.incoming,
-        damaged: product.damaged,
+        incoming:  product.incoming,
+        damaged:   product.damaged,
       })
     } else {
       setForm({
         ...empty,
-        // Pre-select first client when admin is creating
         clientId: role === "admin" && clients.length > 0 ? clients[0].id : undefined,
       })
     }
@@ -91,13 +103,56 @@ export function ProductModal({
     setForm((f) => ({ ...f, [key]: value }))
   }
 
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    // Reset so re-selecting the same file fires onChange
+    e.target.value = ""
+    if (!file) return
+
+    if (!ALLOWED_TYPES.includes(file.type)) {
+      setImageError("Only JPG, PNG, and WebP images are allowed.")
+      return
+    }
+    if (file.size > MAX_BYTES) {
+      setImageError("Image must be under 5 MB.")
+      return
+    }
+
+    setImageError(null)
+    setImageFile(file)
+    setImagePreview(URL.createObjectURL(file))
+  }
+
+  function handleRemoveImage() {
+    if (imageFile) {
+      // Cancel the pending selection; restore whatever was previously saved
+      setImageFile(null)
+      setImagePreview(null)
+    } else {
+      // Remove the existing saved image
+      set("image", null)
+    }
+  }
+
   async function handleSubmit(e: { preventDefault(): void }) {
     e.preventDefault()
     if (!form.name.trim() || !form.sku.trim()) return
     setSaving(true)
     setSaveError(null)
     try {
-      await onSave(form)
+      let imageUrl = form.image
+
+      if (imageFile) {
+        const fd = new FormData()
+        fd.set("file", imageFile)
+        // Pass clientId so the server can build the right storage path
+        const clientId = form.clientId ?? product?.clientId
+        if (clientId) fd.set("clientId", clientId)
+        if (product?.id) fd.set("productId", product.id)
+        imageUrl = await uploadProductImage(fd)
+      }
+
+      await onSave({ ...form, image: imageUrl })
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Failed to save product.")
     } finally {
@@ -106,8 +161,10 @@ export function ProductModal({
   }
 
   const isEdit = !!product
-  const showClientSelector =
-    role === "admin" && !isEdit && clients.length > 0
+  const showClientSelector = role === "admin" && !isEdit && clients.length > 0
+
+  // What to show in the image slot
+  const displayImage = imagePreview ?? form.image
 
   return (
     <Modal
@@ -144,23 +201,54 @@ export function ProductModal({
             Product Image
           </label>
           <div className="flex items-center gap-4">
-            {form.image ? (
-              <img
-                src={form.image}
-                alt="Product"
-                className="size-16 rounded-lg object-cover border border-gray-200"
-              />
+            {displayImage ? (
+              <div className="relative shrink-0">
+                <img
+                  src={displayImage}
+                  alt="Product"
+                  className="size-16 rounded-lg object-cover border border-gray-200"
+                />
+                <button
+                  type="button"
+                  onClick={handleRemoveImage}
+                  className="absolute -top-1.5 -right-1.5 flex size-4 items-center justify-center rounded-full bg-gray-700 hover:bg-gray-900 text-white"
+                  title="Remove image"
+                >
+                  <X className="size-2.5" />
+                </button>
+              </div>
             ) : (
-              <div className="size-16 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center bg-gray-50">
+              <div className="size-16 shrink-0 rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center bg-gray-50">
                 <Upload className="size-5 text-gray-400" />
               </div>
             )}
-            <button
-              type="button"
-              className="text-[13px] font-medium text-blue-600 hover:text-blue-700"
-            >
-              {form.image ? "Change image" : "Upload image"}
-            </button>
+
+            <div className="flex flex-col gap-1 min-w-0">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="self-start text-[13px] font-medium text-blue-600 hover:text-blue-700"
+              >
+                {displayImage ? "Change image" : "Upload image"}
+              </button>
+              {imageFile && (
+                <p className="text-[11px] text-gray-400 truncate max-w-[220px]">
+                  {imageFile.name}
+                </p>
+              )}
+              {imageError && (
+                <p className="text-[11px] text-red-500">{imageError}</p>
+              )}
+              <p className="text-[11px] text-gray-400">JPG, PNG, WebP · max 5 MB</p>
+            </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/jpeg,image/jpg,image/png,image/webp"
+              className="hidden"
+              onChange={handleFileChange}
+            />
           </div>
         </div>
 
@@ -258,7 +346,6 @@ export function ProductModal({
               Admin Only
             </p>
 
-            {/* Client selector — only when creating a new product */}
             {showClientSelector && (
               <div>
                 <label className="block text-[12px] font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
@@ -282,7 +369,6 @@ export function ProductModal({
               </div>
             )}
 
-            {/* Inventory counts */}
             <div>
               <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">
                 Inventory
@@ -291,8 +377,8 @@ export function ProductModal({
                 {(
                   [
                     { key: "available", label: "Available" },
-                    { key: "incoming", label: "Incoming" },
-                    { key: "damaged", label: "Damaged" },
+                    { key: "incoming",  label: "Incoming" },
+                    { key: "damaged",   label: "Damaged" },
                   ] as { key: "available" | "incoming" | "damaged"; label: string }[]
                 ).map(({ key, label }) => (
                   <div key={key}>

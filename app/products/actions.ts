@@ -1,7 +1,47 @@
 "use server"
 
 import { createSupabaseServerClient } from "@/lib/supabase-server"
+import { createServerAdminClient } from "@/lib/supabase"
 import type { Product } from "@/lib/types"
+
+const PRODUCT_IMAGE_BUCKET = "product-images"
+const ALLOWED_IMAGE_TYPES  = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
+const MAX_IMAGE_BYTES       = 5 * 1024 * 1024 // 5 MB
+
+export async function uploadProductImage(formData: FormData): Promise<string> {
+  const supabase    = await createSupabaseServerClient()
+  const adminClient = createServerAdminClient()
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error("Unauthorized")
+
+  const file = formData.get("file") as File | null
+  if (!file || file.size === 0) throw new Error("No file provided.")
+  if (!ALLOWED_IMAGE_TYPES.includes(file.type))
+    throw new Error("Only JPG, PNG, and WebP images are allowed.")
+  if (file.size > MAX_IMAGE_BYTES)
+    throw new Error("Image must be under 5 MB.")
+
+  const isAdmin  = user.app_metadata?.role === "admin"
+  const clientId = isAdmin
+    ? ((formData.get("clientId") as string | null) ?? "unknown")
+    : ((user.app_metadata?.client_id as string | undefined) ?? "unknown")
+
+  const productId = (formData.get("productId") as string | null) ?? crypto.randomUUID()
+  const ext       = file.name.split(".").pop()?.toLowerCase() ?? "jpg"
+  const path      = `${clientId}/${productId}/${crypto.randomUUID()}.${ext}`
+
+  const { error: upErr } = await adminClient.storage
+    .from(PRODUCT_IMAGE_BUCKET)
+    .upload(path, file, { contentType: file.type, upsert: true })
+  if (upErr) throw new Error(upErr.message)
+
+  const { data: { publicUrl } } = adminClient.storage
+    .from(PRODUCT_IMAGE_BUCKET)
+    .getPublicUrl(path)
+
+  return publicUrl
+}
 
 // ── Type helpers ──────────────────────────────────────────────
 
