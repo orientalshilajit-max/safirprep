@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useMemo, useEffect } from "react"
-import { Search, SlidersHorizontal, Plus, Pencil, Archive, ChevronLeft, ChevronRight } from "lucide-react"
+import { Search, SlidersHorizontal, Plus, Pencil, Archive, ChevronLeft, ChevronRight, X } from "lucide-react"
 import { useRole, useProducts, useIsMockMode } from "@/components/layout/app-shell"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -28,8 +28,9 @@ export default function ProductsPage() {
   const [search, setSearch] = useState("")
   const [statusFilter, setStatusFilter] = useState<"all" | "Active" | "Archived">("all")
   const [page, setPage] = useState(1)
-  const [modalOpen, setModalOpen] = useState(false)
-  const [editing, setEditing] = useState<Product | null>(null)
+  const [modalOpen,     setModalOpen]     = useState(false)
+  const [editing,       setEditing]       = useState<Product | null>(null)
+  const [previewImage,  setPreviewImage]  = useState<string | null>(null)
 
   // Client list for admin product-creation (Supabase mode only)
   const [pageClients, setPageClients] = useState<{ id: string; name: string }[]>([])
@@ -41,6 +42,13 @@ export default function ProductsPage() {
         .catch(() => {/* non-critical — admin can still save without selector */})
     }
   }, [isMockMode, role])
+
+  useEffect(() => {
+    if (!previewImage) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setPreviewImage(null) }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [previewImage])
 
   /* ── Derived state ───────────────────────────────────── */
   const filtered = useMemo(() => {
@@ -129,7 +137,18 @@ export default function ProductsPage() {
       header: "Image",
       headerClassName: "w-14",
       className: "w-14",
-      cell: (row, i) => <ProductThumbnail name={row.name} index={i} size="md" />,
+      cell: (row, i) =>
+        row.image ? (
+          <button
+            type="button"
+            onClick={() => setPreviewImage(row.image!)}
+            className="rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <ProductThumbnail src={row.image} name={row.name} index={i} size="md" />
+          </button>
+        ) : (
+          <ProductThumbnail name={row.name} index={i} size="md" />
+        ),
     },
     {
       id: "name",
@@ -380,6 +399,29 @@ export default function ProductsPage() {
         role={role}
         clients={!isMockMode ? pageClients : undefined}
       />
+
+      {/* Image preview lightbox */}
+      {previewImage && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4"
+          onClick={() => setPreviewImage(null)}
+        >
+          <button
+            type="button"
+            onClick={() => setPreviewImage(null)}
+            className="absolute top-4 right-4 flex size-9 items-center justify-center rounded-full bg-white/10 hover:bg-white/20 text-white transition-colors"
+            aria-label="Close preview"
+          >
+            <X className="size-5" />
+          </button>
+          <img
+            src={previewImage}
+            alt="Product preview"
+            className="max-h-[90vh] max-w-[90vw] rounded-xl object-contain shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
     </div>
   )
 }
