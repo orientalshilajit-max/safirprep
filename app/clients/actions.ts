@@ -288,6 +288,3 @@ export async function activateClientLogin(): Promise<void> {
     .eq("login_status", "invited")
   // Errors are intentionally swallowed — this is a best-effort status promotion.
 }
-if (error?.code === "23505") {
-  return { success: false, error: "Client with this email already exists." }
-}
