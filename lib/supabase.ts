@@ -50,7 +50,17 @@ export function createBrowserClient(): SupabaseClient<Database> {
     )
   }
 
-  _browserClient = createSSRBrowserClient<Database>(url, key)
+  // Explicitly set cookie options so session cookies are consistent between
+  // localhost (http) and production (https).  @supabase/ssr's DEFAULT_COOKIE_OPTIONS
+  // does not include `secure`; the `secure` attribute is instead set by the
+  // proxy's setAll handler on the server side, and by the browser itself
+  // (browsers send all cookies on HTTPS regardless of the Secure flag).
+  _browserClient = createSSRBrowserClient<Database>(url, key, {
+    cookieOptions: {
+      path:     "/",
+      sameSite: "lax",
+    },
+  })
 
   return _browserClient
 }

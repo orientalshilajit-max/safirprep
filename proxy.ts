@@ -19,6 +19,10 @@ import type { NextRequest } from "next/server"
 // Routes that are always public (no session required)
 const PUBLIC_PATHS = ["/login"]
 
+// Log env var presence once per process start (not per request).
+// Values are never logged — only whether they are set.
+let _envLogged = false
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl
 
@@ -26,7 +30,15 @@ export async function proxy(request: NextRequest) {
   const supabaseUrl  = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseAnon = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 
+  if (!_envLogged) {
+    _envLogged = true
+    console.log("[Proxy] env check — NEXT_PUBLIC_SUPABASE_URL:",  supabaseUrl  ? "SET" : "MISSING")
+    console.log("[Proxy] env check — NEXT_PUBLIC_SUPABASE_ANON_KEY:", supabaseAnon ? "SET" : "MISSING")
+    console.log("[Proxy] env check — SUPABASE_SERVICE_ROLE_KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "SET" : "MISSING")
+  }
+
   if (!supabaseUrl || !supabaseAnon) {
+    console.log("[Proxy] Supabase not configured — passthrough (mock mode)")
     return NextResponse.next()
   }
 
@@ -34,6 +46,12 @@ export async function proxy(request: NextRequest) {
   const response = NextResponse.next({
     request: { headers: request.headers },
   })
+
+  // Detect HTTPS so cookie refreshes written by setAll carry Secure flag.
+  // @supabase/ssr DEFAULT_COOKIE_OPTIONS omits `secure`; we supply it here
+  // to ensure token-refresh Set-Cookie headers are honoured by browsers on
+  // production HTTPS (e.g. Vercel).
+  const isHttps = request.nextUrl.protocol === "https:"
 
   // ── 3. Create the SSR Supabase client ──────────────────────────────
   // Reads session cookies from the incoming request and writes any
@@ -45,24 +63,35 @@ export async function proxy(request: NextRequest) {
         return request.cookies.getAll()
       },
       setAll(cookiesToSet) {
+        // Mutate in-memory so the current request sees refreshed tokens.
         cookiesToSet.forEach(({ name, value }) =>
           request.cookies.set(name, value)
         )
+        // Write to the response so the browser stores the new tokens.
         cookiesToSet.forEach(({ name, value, options }) =>
-          response.cookies.set(name, value, options)
+          response.cookies.set(name, value, {
+            path:     "/",
+            sameSite: "lax",
+            httpOnly: false,   // browser client (document.cookie) must be able to read these
+            ...options,
+            secure: isHttps,   // always match the connection's protocol
+          })
         )
       },
     },
   })
 
-  // ── 4. Validate the session (server-validated JWT check) ───────────
+  // ── 4. Validate the session ────────────────────────────────────────
   // getUser() re-validates with the Supabase Auth server on each call,
   // so a tampered or expired cookie cannot bypass protection.
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
-  console.log(`[Proxy] ${pathname} — session: ${user ? "yes (" + user.id + ")" : "no"}`)
+  // Log cookie names (not values) and auth result.
+  const cookieNames = request.cookies.getAll().map((c) => c.name)
+  console.log(`[Proxy] ${pathname} — cookies: [${cookieNames.join(", ")}]`)
+  console.log(`[Proxy] ${pathname} — user: ${user ? "yes" : "no"}`)
 
   const isPublicPath = PUBLIC_PATHS.some((p) => pathname.startsWith(p))
 
@@ -74,13 +103,13 @@ export async function proxy(request: NextRequest) {
     if (pathname !== "/") {
       loginUrl.searchParams.set("redirect", pathname)
     }
-    console.log(`[Proxy] no session → redirecting to ${loginUrl.pathname}${loginUrl.search}`)
+    console.log(`[Proxy] no session → redirect ${loginUrl.pathname}${loginUrl.search}`)
     return NextResponse.redirect(loginUrl)
   }
 
   // Authenticated + /login → redirect to /dashboard
   if (user && isPublicPath) {
-    console.log(`[Proxy] authenticated on public path → redirecting to /dashboard`)
+    console.log(`[Proxy] authenticated on /login → redirect /dashboard`)
     return NextResponse.redirect(new URL("/dashboard", request.url))
   }
 

@@ -59,6 +59,13 @@ function LoginForm() {
         return
       }
 
+      // Log cookie names (not values) so we can verify the session was stored.
+      const cookieNames = document.cookie
+        .split(";")
+        .map((c) => c.trim().split("=")[0])
+        .filter(Boolean)
+      console.log("[Login] cookies after sign-in:", cookieNames)
+
       console.log("[Login] navigating to", redirect)
       router.push(redirect)
       router.refresh()
