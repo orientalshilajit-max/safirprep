@@ -1,5 +1,6 @@
 "use client"
 
+import { useState, useEffect } from "react"
 import Link from "next/link"
 import {
   Package,
@@ -24,15 +25,19 @@ import {
   useInvoices,
   useFiles,
   useClients,
+  useAuthUser,
+  useIsMockMode,
 } from "@/components/layout/app-shell"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { StatCard } from "@/components/ui/stat-card"
-import type { Shipment, ServiceRequest, FileDoc, Invoice, Client } from "@/lib/types"
+import { listRecentActivity, type ActivityEntry } from "./actions"
+import type { Invoice } from "@/lib/types"
 
 /* ─────────────────────────────────────────────────────────
-   Shared helpers
+   Helpers
 ───────────────────────────────────────────────────────── */
 
+// Used only in mock mode to scope data to a single demo client
 const DEMO_CLIENT_ID = "c1"
 
 function invoiceTotal(inv: Invoice) {
@@ -45,6 +50,29 @@ function fmt(n: number) {
 
 function fmtExact(n: number) {
   return n.toLocaleString("en-US", { style: "currency", currency: "USD" })
+}
+
+function timeAgo(iso: string): string {
+  const diffMs = Date.now() - new Date(iso).getTime()
+  const mins   = Math.floor(diffMs / 60_000)
+  if (mins < 1)   return "just now"
+  if (mins < 60)  return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24)   return `${hrs}h ago`
+  return `${Math.floor(hrs / 24)}d ago`
+}
+
+/* ── Entity → icon/color for real activity entries ─────── */
+function entityStyle(type: string) {
+  switch (type) {
+    case "client":          return { Icon: Users,    color: "bg-blue-50 text-blue-600"     }
+    case "shipment":        return { Icon: Truck,    color: "bg-orange-50 text-orange-500" }
+    case "service_request": return { Icon: Wrench,   color: "bg-violet-50 text-violet-600" }
+    case "invoice":         return { Icon: FileText, color: "bg-green-50 text-green-600"   }
+    case "product":         return { Icon: Package,  color: "bg-blue-50 text-blue-600"     }
+    case "file":            return { Icon: Archive,  color: "bg-gray-100 text-gray-500"    }
+    default:                return { Icon: File,     color: "bg-gray-50 text-gray-400"     }
+  }
 }
 
 /* ── Section wrapper ──────────────────────────────────── */
@@ -170,36 +198,58 @@ function FileTypeIcon({ ext }: { ext: string }) {
    CLIENT DASHBOARD
 ───────────────────────────────────────────────────────── */
 function ClientDashboard() {
+  const isMockMode = useIsMockMode()
+  const authUser   = useAuthUser()
   const { products } = useProducts()
   const { shipments } = useShipments()
   const { requests } = useRequests()
   const { invoices } = useInvoices()
   const { files } = useFiles()
 
-  const myProducts = products.filter((p) => p.clientId === DEMO_CLIENT_ID && p.status === "Active")
-  const myShipments = shipments.filter((s) => s.clientId === DEMO_CLIENT_ID && !s.isArchived)
-  const myRequests = requests.filter((r) => r.clientId === DEMO_CLIENT_ID && !r.isArchived)
-  const myInvoices = invoices.filter((i) => i.clientId === DEMO_CLIENT_ID)
-  const myFiles = files.filter((f) => f.clientId === DEMO_CLIENT_ID)
+  // In Supabase mode, RLS already returns only this client's data.
+  // In mock mode, multiple clients exist — filter to the demo client.
+  const cid = isMockMode ? DEMO_CLIENT_ID : null
 
-  const availableUnits = myProducts.reduce((s, p) => s + p.available, 0)
-  const incomingUnits = products
-    .filter((p) => p.clientId === DEMO_CLIENT_ID)
-    .reduce((s, p) => s + p.incoming, 0)
-  const openRequests = myRequests.filter((r) => r.status === "New").length
+  const myProducts  = cid ? products.filter((p) => p.clientId === cid) : products
+  const myShipments = cid
+    ? shipments.filter((s) => s.clientId === cid && !s.isArchived)
+    : shipments.filter((s) => !s.isArchived)
+  const myRequests  = cid
+    ? requests.filter((r) => r.clientId === cid && !r.isArchived)
+    : requests.filter((r) => !r.isArchived)
+  const myInvoices  = cid ? invoices.filter((i) => i.clientId === cid) : invoices
+  const myFiles     = cid ? files.filter((f) => f.clientId === cid)     : files
+
+  // Show a clear error when the JWT is missing client_id (misconfigured invite)
+  if (!isMockMode && !authUser?.clientId) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-center gap-3">
+        <div className="flex size-14 items-center justify-center rounded-full bg-amber-50">
+          <AlertTriangle className="size-6 text-amber-500" />
+        </div>
+        <p className="text-[15px] font-semibold text-gray-700">Account not linked</p>
+        <p className="text-[13px] text-gray-400 max-w-xs">
+          Your account is not linked to a client profile.
+          Contact your administrator to complete the setup.
+        </p>
+      </div>
+    )
+  }
+
+  const activeProducts = myProducts.filter((p) => p.status === "Active")
+  const availableUnits = activeProducts.reduce((s, p) => s + p.available, 0)
+  const incomingUnits  = myProducts.reduce((s, p) => s + p.incoming, 0)
+  const openRequests   = myRequests.filter((r) => r.status === "New").length
   const unpaidInvoices = myInvoices.filter((i) => ["Unpaid", "Overdue"].includes(i.status)).length
 
-  /* Recent shipments – last 4 */
   const recentShipments = [...myShipments]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, 4)
 
-  /* Open requests – New + In Progress, last 5 */
   const openReqs = myRequests
     .filter((r) => ["New", "In Progress"].includes(r.status))
     .slice(0, 5)
 
-  /* Recent files – last 5 */
   const recentFiles = [...myFiles]
     .sort((a, b) => b.uploadedAt.localeCompare(a.uploadedAt))
     .slice(0, 5)
@@ -316,51 +366,84 @@ function ClientDashboard() {
    ADMIN DASHBOARD
 ───────────────────────────────────────────────────────── */
 
-const ACTIVITY = [
-  { id: 1, icon: Users,   color: "bg-blue-50 text-blue-600",   text: "PrimePack Inc. account created",                  time: "2 days ago" },
-  { id: 2, icon: Wrench,  color: "bg-violet-50 text-violet-600", text: "REQ-2005 submitted by TechVault Co.",            time: "1 day ago"  },
-  { id: 3, icon: Truck,   color: "bg-orange-50 text-orange-500", text: "IN-1008 created for TechVault Co.",              time: "2 days ago" },
-  { id: 4, icon: FileText,color: "bg-green-50 text-green-600",  text: "Invoice INV-0041 generated · TechVault Co.",      time: "6 days ago" },
-  { id: 5, icon: Wrench,  color: "bg-violet-50 text-violet-600", text: "REQ-2004 submitted by NovaTrade Ltd.",           time: "2 days ago" },
-  { id: 6, icon: Truck,   color: "bg-orange-50 text-orange-500", text: "IN-1007 created for NovaTrade Ltd.",             time: "5 days ago" },
-  { id: 7, icon: FileText,color: "bg-green-50 text-green-600",  text: "Invoice INV-0040 generated · NovaTrade Ltd.",     time: "11 days ago"},
-  { id: 8, icon: Package, color: "bg-blue-50 text-blue-600",    text: "Laptop Stand Adjustable added to inventory",       time: "13 days ago"},
-]
-
-const REVENUE = [
-  { label: "Today",      value: 0 },
-  { label: "This Week",  value: 545 },
-  { label: "This Month", value: 2842 },
+// Static activity shown in mock/dev mode only
+const MOCK_ACTIVITY = [
+  { id: "1", entityType: "client",          message: "PrimePack Inc. account created",              time: "2 days ago" },
+  { id: "2", entityType: "service_request", message: "REQ-2005 submitted by TechVault Co.",          time: "1 day ago"  },
+  { id: "3", entityType: "shipment",        message: "IN-1008 created for TechVault Co.",             time: "2 days ago" },
+  { id: "4", entityType: "invoice",         message: "Invoice INV-0041 generated · TechVault Co.",   time: "6 days ago" },
+  { id: "5", entityType: "service_request", message: "REQ-2004 submitted by NovaTrade Ltd.",          time: "2 days ago" },
+  { id: "6", entityType: "shipment",        message: "IN-1007 created for NovaTrade Ltd.",             time: "5 days ago" },
+  { id: "7", entityType: "invoice",         message: "Invoice INV-0040 generated · NovaTrade Ltd.",   time: "11 days ago"},
+  { id: "8", entityType: "product",         message: "Laptop Stand Adjustable added to inventory",    time: "13 days ago"},
 ]
 
 function AdminDashboard() {
-  const { products } = useProducts()
+  const isMockMode = useIsMockMode()
   const { shipments } = useShipments()
-  const { requests } = useRequests()
-  const { invoices } = useInvoices()
-  const { clients } = useClients()
+  const { requests }  = useRequests()
+  const { invoices }  = useInvoices()
+  const { clients }   = useClients()
 
-  const activeClients = clients.filter((c) => !c.isArchived && c.status === "Active").length
+  // ── Activity log ──────────────────────────────────────
+  const [activity, setActivity] = useState<ActivityEntry[]>([])
+
+  useEffect(() => {
+    if (isMockMode) return
+    listRecentActivity(10).then(setActivity).catch(() => {})
+  }, [isMockMode])
+
+  // ── Stats ─────────────────────────────────────────────
+  const activeClients    = clients.filter((c) => !c.isArchived && c.status === "Active").length
   const inboundShipments = shipments.filter(
     (s) => !s.isArchived && ["In Transit", "Arrived"].includes(s.status)
   ).length
-  const openRequests = requests.filter(
+  const openRequests  = requests.filter(
     (r) => !r.isArchived && ["New", "In Progress"].includes(r.status)
   ).length
   const unpaidInvoices = invoices.filter((i) => ["Unpaid", "Overdue"].includes(i.status)).length
-  const revenue = invoices
-    .filter((i) => i.status === "Paid")
-    .reduce((s, i) => s + invoiceTotal(i), 0)
 
-  /* Recent shipments – last 5 */
+  // ── Revenue ───────────────────────────────────────────
+  const paidInvoices = invoices.filter((i) => i.status === "Paid")
+  const revenue      = paidInvoices.reduce((s, i) => s + invoiceTotal(i), 0)
+
+  // Date-windowed revenue from ISO createdAt (Supabase mode).
+  // Falls back to the original mock figures in dev mode.
+  let revenueToday = 0, revenueThisWeek = 0, revenueThisMonth = 0
+
+  if (isMockMode) {
+    revenueToday     = 0
+    revenueThisWeek  = 545
+    revenueThisMonth = 2842
+  } else {
+    const now        = new Date()
+    const todayMs    = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+    const weekMs     = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay()).getTime()
+    const monthMs    = new Date(now.getFullYear(), now.getMonth(), 1).getTime()
+
+    for (const inv of paidInvoices) {
+      if (!inv.createdAt) continue
+      const t = new Date(inv.createdAt).getTime()
+      const a = invoiceTotal(inv)
+      if (t >= todayMs)  revenueToday     += a
+      if (t >= weekMs)   revenueThisWeek  += a
+      if (t >= monthMs)  revenueThisMonth += a
+    }
+  }
+
+  // ── Table data ────────────────────────────────────────
   const recentShipments = [...shipments.filter((s) => !s.isArchived)]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, 5)
 
-  /* Open requests – New + In Progress, last 6 */
   const openReqs = requests
     .filter((r) => !r.isArchived && ["New", "In Progress"].includes(r.status))
     .slice(0, 6)
+
+  // Unified shape for the activity panel
+  const activityItems = isMockMode
+    ? MOCK_ACTIVITY
+    : activity.map((a) => ({ id: a.id, entityType: a.entityType, message: a.message, time: timeAgo(a.createdAt) }))
 
   return (
     <div className="flex flex-col gap-4 h-full">
@@ -468,19 +551,24 @@ function AdminDashboard() {
               <h2 className="text-[13px] font-semibold text-gray-800">Recent Activity</h2>
             </div>
             <div className="divide-y divide-gray-50 overflow-y-auto">
-              {ACTIVITY.map((item) => (
-                <div key={item.id} className="flex items-start gap-3 px-4 py-3">
-                  <div
-                    className={`flex size-7 shrink-0 items-center justify-center rounded-lg mt-0.5 ${item.color}`}
-                  >
-                    <item.icon className="size-3.5" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-[12px] text-gray-700 leading-snug">{item.text}</p>
-                    <p className="text-[11px] text-gray-400 mt-0.5">{item.time}</p>
-                  </div>
-                </div>
-              ))}
+              {activityItems.length === 0 ? (
+                <p className="px-4 py-8 text-center text-[12px] text-gray-400">No recent activity</p>
+              ) : (
+                activityItems.map((item) => {
+                  const { Icon, color } = entityStyle(item.entityType)
+                  return (
+                    <div key={item.id} className="flex items-start gap-3 px-4 py-3">
+                      <div className={`flex size-7 shrink-0 items-center justify-center rounded-lg mt-0.5 ${color}`}>
+                        <Icon className="size-3.5" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="text-[12px] text-gray-700 leading-snug">{item.message}</p>
+                        <p className="text-[11px] text-gray-400 mt-0.5">{item.time}</p>
+                      </div>
+                    </div>
+                  )
+                })
+              )}
             </div>
           </div>
 
@@ -491,19 +579,17 @@ function AdminDashboard() {
               <p className="text-[11px] text-gray-400 mt-0.5">Paid invoices only</p>
             </div>
             <div className="px-4 py-3 divide-y divide-gray-50">
-              {REVENUE.map(({ label, value }) => (
+              {[
+                { label: "Today",      value: revenueToday,     Icon: Clock,        iconClass: "text-gray-300"     },
+                { label: "This Week",  value: revenueThisWeek,  Icon: CheckCircle,  iconClass: "text-green-400"    },
+                { label: "This Month", value: revenueThisMonth, Icon: DollarSign,   iconClass: "text-emerald-500"  },
+              ].map(({ label, value, Icon, iconClass }) => (
                 <div key={label} className="flex items-center justify-between py-2.5">
                   <div className="flex items-center gap-2">
-                    {label === "Today" && <Clock className="size-3.5 text-gray-300" />}
-                    {label === "This Week" && <CheckCircle className="size-3.5 text-green-400" />}
-                    {label === "This Month" && <DollarSign className="size-3.5 text-emerald-500" />}
+                    <Icon className={`size-3.5 ${iconClass}`} />
                     <span className="text-[13px] text-gray-600">{label}</span>
                   </div>
-                  <span
-                    className={`text-[14px] font-bold tabular-nums ${
-                      value === 0 ? "text-gray-300" : "text-gray-900"
-                    }`}
-                  >
+                  <span className={`text-[14px] font-bold tabular-nums ${value === 0 ? "text-gray-300" : "text-gray-900"}`}>
                     {fmtExact(value)}
                   </span>
                 </div>

@@ -63,6 +63,7 @@ function mapRow(row: DbInvoiceRow): Invoice {
     })),
     notes:                    row.notes ?? "",
     relatedRequestNumber:     row.service_requests?.request_number ?? undefined,
+    createdAt:                row.created_at,
   }
 }
 

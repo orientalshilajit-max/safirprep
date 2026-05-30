@@ -175,6 +175,8 @@ export type Invoice = {
   lineItems: InvoiceLineItem[]
   notes: string
   relatedRequestNumber?: string
+  /** ISO timestamp — present in Supabase mode, absent in mock mode. Used for date-based revenue filtering. */
+  createdAt?: string
 }
 
 export type FileCategory =
