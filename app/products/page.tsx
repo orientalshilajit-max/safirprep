@@ -1,19 +1,26 @@
 "use client"
 
 import { useState, useMemo, useEffect } from "react"
-import { Search, SlidersHorizontal, Plus, Pencil, Archive, ChevronLeft, ChevronRight, X } from "lucide-react"
+import {
+  Search, SlidersHorizontal, Plus, Pencil,
+  Archive, ArchiveRestore, Trash2,
+  ChevronLeft, ChevronRight, X, AlertCircle, CheckCircle2,
+} from "lucide-react"
 import { useRole, useProducts, useIsMockMode } from "@/components/layout/app-shell"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { IconButton } from "@/components/ui/icon-button"
 import { ProductThumbnail } from "@/components/ui/product-thumbnail"
 import { EmptyState } from "@/components/ui/empty-state"
+import { ConfirmModal } from "@/components/ui/confirm-modal"
 import { ProductModal } from "@/components/products/product-modal"
 import type { ProductFormData } from "@/components/products/product-modal"
 import {
   createProduct,
   updateProduct,
-  toggleProductArchive,
+  archiveProduct,
+  restoreProduct,
+  deleteProductPermanently,
   listProductClients,
 } from "@/app/products/actions"
 import type { Product, DataTableColumn } from "@/lib/types"
@@ -25,12 +32,14 @@ export default function ProductsPage() {
   const { products, setProducts } = useProducts()
   const isMockMode = useIsMockMode()
 
-  const [search, setSearch] = useState("")
-  const [statusFilter, setStatusFilter] = useState<"all" | "Active" | "Archived">("all")
-  const [page, setPage] = useState(1)
+  const [search,        setSearch]        = useState("")
+  const [statusFilter,  setStatusFilter]  = useState<"all" | "Active" | "Archived">("Active")
+  const [page,          setPage]          = useState(1)
   const [modalOpen,     setModalOpen]     = useState(false)
   const [editing,       setEditing]       = useState<Product | null>(null)
   const [previewImage,  setPreviewImage]  = useState<string | null>(null)
+  const [deleteTarget,  setDeleteTarget]  = useState<Product | null>(null)
+  const [actionMessage, setActionMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
 
   // Client list for admin product-creation (Supabase mode only)
   const [pageClients, setPageClients] = useState<{ id: string; name: string }[]>([])
@@ -39,7 +48,7 @@ export default function ProductsPage() {
     if (!isMockMode && role === "admin") {
       listProductClients()
         .then(setPageClients)
-        .catch(() => {/* non-critical — admin can still save without selector */})
+        .catch(() => {})
     }
   }, [isMockMode, role])
 
@@ -60,38 +69,33 @@ export default function ProductsPage() {
         p.sku.toLowerCase().includes(q) ||
         p.asin.toLowerCase().includes(q) ||
         p.fnsku.toLowerCase().includes(q)
-      const matchStatus =
-        statusFilter === "all" || p.status === statusFilter
+      const matchStatus = statusFilter === "all" || p.status === statusFilter
       return matchSearch && matchStatus
     })
   }, [products, search, statusFilter])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const safePage = Math.min(page, totalPages)
-  const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  const safePage   = Math.min(page, totalPages)
+  const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
-  /* ── Actions ─────────────────────────────────────────── */
-  function openAdd() {
-    setEditing(null)
-    setModalOpen(true)
+  /* ── Helpers ─────────────────────────────────────────── */
+  function flash(type: "success" | "error", text: string) {
+    setActionMessage({ type, text })
+    if (type === "success") setTimeout(() => setActionMessage(null), 3000)
   }
 
-  function openEdit(p: Product) {
-    setEditing(p)
-    setModalOpen(true)
-  }
+  function openAdd()        { setEditing(null); setModalOpen(true) }
+  function openEdit(p: Product) { setEditing(p);  setModalOpen(true) }
 
+  /* ── Save ────────────────────────────────────────────── */
   async function handleSave(data: ProductFormData) {
     if (isMockMode) {
-      // Mock mode: update local state only
       if (editing) {
-        setProducts((ps) =>
-          ps.map((p) => (p.id === editing.id ? { ...p, ...data } : p))
-        )
+        setProducts((ps) => ps.map((p) => (p.id === editing.id ? { ...p, ...data } : p)))
       } else {
         const next: Product = {
           id: `p${Date.now()}`,
-          clientId: "c1",
+          clientId:   "c1",
           clientName: "TechVault Co.",
           ...data,
         }
@@ -101,7 +105,6 @@ export default function ProductsPage() {
       return
     }
 
-    // Supabase mode: call server action, update context with returned record
     if (editing) {
       const updated = await updateProduct(editing.id, data)
       setProducts((ps) => ps.map((p) => (p.id === editing.id ? updated : p)))
@@ -112,22 +115,56 @@ export default function ProductsPage() {
     setModalOpen(false)
   }
 
+  /* ── Archive ─────────────────────────────────────────── */
   async function handleArchive(id: string) {
     if (isMockMode) {
-      setProducts((ps) =>
-        ps.map((p) =>
-          p.id === id
-            ? { ...p, status: p.status === "Archived" ? "Active" : "Archived" }
-            : p
-        )
-      )
+      setProducts((ps) => ps.map((p) => (p.id === id ? { ...p, status: "Archived" as const } : p)))
+      flash("success", "Product archived successfully.")
       return
     }
+    try {
+      await archiveProduct(id)
+      setProducts((ps) => ps.map((p) => (p.id === id ? { ...p, status: "Archived" as const } : p)))
+      flash("success", "Product archived successfully.")
+    } catch (err) {
+      flash("error", err instanceof Error ? err.message : "Failed to archive product.")
+    }
+  }
 
-    const newStatus = await toggleProductArchive(id)
-    setProducts((ps) =>
-      ps.map((p) => (p.id === id ? { ...p, status: newStatus } : p))
-    )
+  /* ── Restore ─────────────────────────────────────────── */
+  async function handleRestore(id: string) {
+    if (isMockMode) {
+      setProducts((ps) => ps.map((p) => (p.id === id ? { ...p, status: "Active" as const } : p)))
+      flash("success", "Product restored successfully.")
+      return
+    }
+    try {
+      await restoreProduct(id)
+      setProducts((ps) => ps.map((p) => (p.id === id ? { ...p, status: "Active" as const } : p)))
+      flash("success", "Product restored successfully.")
+    } catch (err) {
+      flash("error", err instanceof Error ? err.message : "Failed to restore product.")
+    }
+  }
+
+  /* ── Permanent delete ────────────────────────────────── */
+  async function handleDeleteConfirm() {
+    if (!deleteTarget) return
+    const id = deleteTarget.id
+    setDeleteTarget(null)
+
+    if (isMockMode) {
+      setProducts((ps) => ps.filter((p) => p.id !== id))
+      flash("success", "Product deleted permanently.")
+      return
+    }
+    try {
+      await deleteProductPermanently(id)
+      setProducts((ps) => ps.filter((p) => p.id !== id))
+      flash("success", "Product deleted permanently.")
+    } catch (err) {
+      flash("error", err instanceof Error ? err.message : "Failed to delete product.")
+    }
   }
 
   /* ── Column definitions ──────────────────────────────── */
@@ -208,20 +245,42 @@ export default function ProductsPage() {
     {
       id: "actions",
       header: "Actions",
-      headerClassName: "text-right w-20",
-      className: "text-right w-20",
+      headerClassName: "text-right w-28",
+      className: "text-right w-28",
       cell: (row) => (
         <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <IconButton variant="primary" onClick={() => openEdit(row)} title="Edit">
             <Pencil className="size-3.5" />
           </IconButton>
-          <IconButton
-            variant="danger"
-            onClick={() => handleArchive(row.id)}
-            title={row.status === "Archived" ? "Restore" : "Archive"}
-          >
-            <Archive className="size-3.5" />
-          </IconButton>
+
+          {row.status === "Active" ? (
+            /* Active product: Archive */
+            <IconButton
+              variant="danger"
+              onClick={() => handleArchive(row.id)}
+              title="Archive"
+            >
+              <Archive className="size-3.5" />
+            </IconButton>
+          ) : (
+            /* Archived product: Restore + Delete Permanently */
+            <>
+              <IconButton
+                variant="primary"
+                onClick={() => handleRestore(row.id)}
+                title="Restore"
+              >
+                <ArchiveRestore className="size-3.5" />
+              </IconButton>
+              <IconButton
+                variant="danger"
+                onClick={() => setDeleteTarget(row)}
+                title="Delete Permanently"
+              >
+                <Trash2 className="size-3.5" />
+              </IconButton>
+            </>
+          )}
         </div>
       ),
     },
@@ -238,11 +297,7 @@ export default function ProductsPage() {
 
   const columns =
     role === "admin"
-      ? [
-          ...baseColumns.slice(0, 2),
-          adminClientCol,
-          ...baseColumns.slice(2),
-        ]
+      ? [...baseColumns.slice(0, 2), adminClientCol, ...baseColumns.slice(2)]
       : baseColumns
 
   /* ── Render ──────────────────────────────────────────── */
@@ -263,11 +318,36 @@ export default function ProductsPage() {
         </button>
       </div>
 
+      {/* Action message banner */}
+      {actionMessage && (
+        <div className={`flex items-start gap-2 rounded-lg border px-4 py-3 ${
+          actionMessage.type === "success"
+            ? "border-green-100 bg-green-50"
+            : "border-red-100 bg-red-50"
+        }`}>
+          {actionMessage.type === "success" ? (
+            <CheckCircle2 className="size-4 text-green-600 mt-0.5 shrink-0" />
+          ) : (
+            <AlertCircle className="size-4 text-red-500 mt-0.5 shrink-0" />
+          )}
+          <p className={`text-[13px] flex-1 ${
+            actionMessage.type === "success" ? "text-green-700" : "text-red-600"
+          }`}>
+            {actionMessage.text}
+          </p>
+          <button
+            onClick={() => setActionMessage(null)}
+            className="text-gray-400 hover:text-gray-600"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Table card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden flex-1 min-h-0">
         {/* Toolbar */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-200">
-          {/* Search */}
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-gray-400 pointer-events-none" />
             <input
@@ -279,18 +359,16 @@ export default function ProductsPage() {
             />
           </div>
 
-          {/* Status filter */}
           <select
             value={statusFilter}
             onChange={(e) => { setStatusFilter(e.target.value as typeof statusFilter); setPage(1) }}
             className="px-3 py-2 text-[13px] border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-600"
           >
-            <option value="all">All Products</option>
             <option value="Active">Active</option>
             <option value="Archived">Archived</option>
+            <option value="all">All Products</option>
           </select>
 
-          {/* Filters */}
           <button className="flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
             <SlidersHorizontal className="size-3.5" />
             Filters
@@ -307,12 +385,12 @@ export default function ProductsPage() {
               <EmptyState
                 title="No products found"
                 description={
-                  search
+                  search || statusFilter !== "all"
                     ? "Try adjusting your search or filter."
                     : "Add your first product to get started."
                 }
                 action={
-                  !search && (
+                  !search && statusFilter === "Active" && (
                     <button
                       onClick={openAdd}
                       className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-[13px] font-semibold rounded-lg hover:bg-blue-700 transition-colors"
@@ -342,7 +420,6 @@ export default function ProductsPage() {
             <span className="font-medium text-gray-700">{filtered.length}</span>{" "}
             products
           </p>
-
           <div className="flex items-center gap-1">
             <button
               onClick={() => setPage((p) => Math.max(1, p - 1))}
@@ -351,7 +428,6 @@ export default function ProductsPage() {
             >
               <ChevronLeft className="size-3.5" />
             </button>
-
             {Array.from({ length: totalPages }, (_, i) => i + 1)
               .filter((n) => n === 1 || n === totalPages || Math.abs(n - safePage) <= 1)
               .reduce<(number | "…")[]>((acc, n, i, arr) => {
@@ -361,9 +437,7 @@ export default function ProductsPage() {
               }, [])
               .map((n, i) =>
                 n === "…" ? (
-                  <span key={`ellipsis-${i}`} className="px-1 text-[12px] text-gray-400">
-                    …
-                  </span>
+                  <span key={`ellipsis-${i}`} className="px-1 text-[12px] text-gray-400">…</span>
                 ) : (
                   <button
                     key={n}
@@ -378,7 +452,6 @@ export default function ProductsPage() {
                   </button>
                 )
               )}
-
             <button
               onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
               disabled={safePage === totalPages}
@@ -390,7 +463,7 @@ export default function ProductsPage() {
         </div>
       </div>
 
-      {/* Modal */}
+      {/* Add / Edit modal */}
       <ProductModal
         isOpen={modalOpen}
         onClose={() => setModalOpen(false)}
@@ -398,6 +471,17 @@ export default function ProductsPage() {
         product={editing}
         role={role}
         clients={!isMockMode ? pageClients : undefined}
+      />
+
+      {/* Permanent delete confirmation */}
+      <ConfirmModal
+        isOpen={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteConfirm}
+        title="Delete product permanently?"
+        message={`This will permanently delete "${deleteTarget?.name}". This action cannot be undone. Only safe if the product has no inventory or activity history.`}
+        confirmLabel="Delete Permanently"
+        variant="danger"
       />
 
       {/* Image preview lightbox */}

@@ -247,29 +247,87 @@ export async function updateProduct(
   return mapRow(full)
 }
 
-/**
- * Toggle a product between active and archived.
- * Returns the new status.
- */
-export async function toggleProductArchive(
-  id: string
-): Promise<"Active" | "Archived"> {
-  const supabase = await createSupabaseServerClient()
+// ── archiveProduct ────────────────────────────────────────────
 
-  const { data: current, error: gErr } = await supabase
+export async function archiveProduct(id: string): Promise<void> {
+  const supabase = await createSupabaseServerClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error("Unauthorized")
+  const { error } = await supabase.from("products").update({ status: "archived" }).eq("id", id)
+  if (error) throw new Error(error.message)
+}
+
+// ── restoreProduct ────────────────────────────────────────────
+
+export async function restoreProduct(id: string): Promise<void> {
+  const supabase = await createSupabaseServerClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error("Unauthorized")
+  const { error } = await supabase.from("products").update({ status: "active" }).eq("id", id)
+  if (error) throw new Error(error.message)
+}
+
+// ── deleteProductPermanently ──────────────────────────────────
+
+const HISTORY_MSG =
+  "This product has activity history and cannot be permanently deleted. Archive it instead."
+
+export async function deleteProductPermanently(id: string): Promise<void> {
+  const supabase = await createSupabaseServerClient()
+  const admin    = createServerAdminClient()
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error("Unauthorized")
+
+  // 1. Inventory quantities must all be zero
+  const { data: inv } = await admin
+    .from("inventory")
+    .select("available_units, incoming_units, damaged_units, received_units, shipped_units")
+    .eq("product_id", id)
+    .maybeSingle()
+  if (inv) {
+    const anyStock =
+      (inv.available_units ?? 0) > 0 ||
+      (inv.incoming_units  ?? 0) > 0 ||
+      (inv.damaged_units   ?? 0) > 0 ||
+      (inv.received_units  ?? 0) > 0 ||
+      (inv.shipped_units   ?? 0) > 0
+    if (anyStock) throw new Error(HISTORY_MSG)
+  }
+
+  // 2. No shipment line items (FK is RESTRICT — would block anyway, but give a clear message)
+  const { count: shipCount } = await admin
+    .from("incoming_shipment_items")
+    .select("id", { count: "exact", head: true })
+    .eq("product_id", id)
+  if ((shipCount ?? 0) > 0) throw new Error(HISTORY_MSG)
+
+  // 3. No service-request line items (FK is RESTRICT)
+  const { count: srCount } = await admin
+    .from("service_request_items")
+    .select("id", { count: "exact", head: true })
+    .eq("product_id", id)
+  if ((srCount ?? 0) > 0) throw new Error(HISTORY_MSG)
+
+  // 4. Best-effort: remove product image from storage
+  const { data: product } = await admin
     .from("products")
-    .select("status")
+    .select("image_url")
     .eq("id", id)
     .single()
-  if (gErr) throw new Error(gErr.message)
+  if (product?.image_url) {
+    try {
+      const url    = new URL(product.image_url)
+      const prefix = `/storage/v1/object/public/${PRODUCT_IMAGE_BUCKET}/`
+      const path   = url.pathname.startsWith(prefix) ? url.pathname.slice(prefix.length) : null
+      if (path) await admin.storage.from(PRODUCT_IMAGE_BUCKET).remove([path])
+    } catch { /* best-effort */ }
+  }
 
-  const next = current.status === "active" ? "archived" : "active"
-
-  const { error: uErr } = await supabase
-    .from("products")
-    .update({ status: next })
-    .eq("id", id)
-  if (uErr) throw new Error(uErr.message)
-
-  return fromDbStatus(next)
+  // 5. Hard-delete the product row (inventory cascades; files set null)
+  const { error: delErr } = await supabase.from("products").delete().eq("id", id)
+  if (delErr) {
+    if (delErr.code === "23503") throw new Error(HISTORY_MSG)
+    throw new Error(delErr.message)
+  }
 }
