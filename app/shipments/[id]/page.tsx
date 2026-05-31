@@ -7,7 +7,8 @@ import { useRole, useProducts, useShipments, useFiles, useIsMockMode, useAuthUse
 import { StatusBadge } from "@/components/ui/status-badge"
 import { CARRIERS } from "@/lib/types"
 import { updateShipment } from "@/app/shipments/actions"
-import { uploadFile } from "@/app/files/actions"
+import { listProducts }   from "@/app/products/actions"
+import { uploadFile }     from "@/app/files/actions"
 import type { Shipment, ShipmentProduct, ShipmentTracking, ShipmentStatus, FileDoc } from "@/lib/types"
 
 const STATUSES: ShipmentStatus[] = [
@@ -116,10 +117,13 @@ export default function EditShipmentPage() {
           prev.map((p) => {
             const sp = shipProducts.find((x) => x.productId === p.id)
             if (!sp) return p
+            const incomingReduction = status === "Received"
+              ? sp.units
+              : sp.receivedUnits + sp.damagedUnits
             return {
               ...p,
               available: p.available + sp.receivedUnits,
-              incoming:  Math.max(0, p.incoming - sp.units),
+              incoming:  Math.max(0, p.incoming - incomingReduction),
               damaged:   p.damaged + sp.damagedUnits,
             }
           })
@@ -156,22 +160,32 @@ export default function EditShipmentPage() {
       // Update shipment in context
       setShipments((prev) => prev.map((s) => (s.id === shipment!.id ? updated : s)))
 
-      // Reflect inventory change in products context (immediate UI feedback)
+      // Re-fetch products from DB so Products page shows accurate stock immediately
       if (shouldSyncInventory) {
-        setProducts((prev) =>
-          prev.map((p) => {
-            const sp = shipProducts.find((x) => x.productId === p.id)
-            if (!sp) return p
-            return {
-              ...p,
-              available: p.available + sp.receivedUnits,
-              incoming:  Math.max(0, p.incoming - sp.units),
-              damaged:   p.damaged + sp.damagedUnits,
-            }
-          })
-        )
+        try {
+          const freshProducts = await listProducts()
+          setProducts(freshProducts)
+        } catch {
+          // Fallback: optimistic context update with correct partial-receive delta
+          setProducts((prev) =>
+            prev.map((p) => {
+              const sp = shipProducts.find((x) => x.productId === p.id)
+              if (!sp) return p
+              const incomingReduction = status === "Received"
+                ? sp.units                              // full receive: clear all incoming
+                : sp.receivedUnits + sp.damagedUnits    // partial: only subtract processed
+              return {
+                ...p,
+                available: p.available + sp.receivedUnits,
+                incoming:  Math.max(0, p.incoming - incomingReduction),
+                damaged:   p.damaged + sp.damagedUnits,
+              }
+            })
+          )
+        }
       }
 
+      router.refresh()
       router.push("/shipments")
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : "Failed to save shipment.")
@@ -324,8 +338,8 @@ export default function EditShipmentPage() {
               </p>
             )}
             {currentShipment.isInventoryUpdated && (
-              <p className="text-[12px] text-green-600 bg-green-50 px-3 py-1.5 rounded-lg">
-                Inventory already updated for this shipment.
+              <p className="text-[12px] text-amber-700 bg-amber-50 border border-amber-200 px-3 py-1.5 rounded-lg">
+                Received shipment inventory has already been posted. Manual stock adjustment is required.
               </p>
             )}
           </div>

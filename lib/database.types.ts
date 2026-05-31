@@ -191,6 +191,7 @@ export type Database = {
           status: Database["public"]["Enums"]["shipment_status"]
           notes: string | null
           inventory_synced: boolean
+          inventory_posted_at: string | null
           archived_at: string | null
           created_at: string
           updated_at: string
@@ -203,6 +204,7 @@ export type Database = {
           status?: Database["public"]["Enums"]["shipment_status"]
           notes?: string | null
           inventory_synced?: boolean
+          inventory_posted_at?: string | null
           archived_at?: string | null
           created_at?: string
           updated_at?: string
@@ -215,6 +217,7 @@ export type Database = {
           status?: Database["public"]["Enums"]["shipment_status"]
           notes?: string | null
           inventory_synced?: boolean
+          inventory_posted_at?: string | null
           archived_at?: string | null
           created_at?: string
           updated_at?: string

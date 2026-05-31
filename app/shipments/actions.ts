@@ -36,7 +36,7 @@ function mapRow(row: any): Shipment {
     status:         FROM_DB[row.status] ?? "In Transit",
     notes:          row.notes ?? "",
     isArchived:     row.archived_at != null,
-    isInventoryUpdated: row.inventory_synced,
+    isInventoryUpdated: row.inventory_posted_at != null || Boolean(row.inventory_synced),
     createdAt: new Date(row.created_at).toLocaleDateString("en-US", {
       month: "short", day: "numeric", year: "numeric",
     }),
@@ -75,7 +75,7 @@ function mapRow(row: any): Shipment {
 }
 
 const SHIPMENT_SELECT = `
-  id, client_id, shipment_number, status, notes, inventory_synced, archived_at, created_at,
+  id, client_id, shipment_number, status, notes, inventory_synced, inventory_posted_at, archived_at, created_at,
   clients (company_name),
   incoming_shipment_items (id, product_id, expected_units, received_units, damaged_units, notes, products (name, sku)),
   shipment_trackings (id, carrier, tracking_number, box_count, notes)
@@ -95,11 +95,34 @@ async function adjustIncoming(productId: string, delta: number) {
     .select("id, incoming_units")
     .eq("product_id", productId)
     .maybeSingle()
-  if (!inv) return
-  await admin
+
+  if (!inv) {
+    // No inventory row — create one using the product's client_id
+    const { data: product, error: pErr } = await admin
+      .from("products")
+      .select("client_id")
+      .eq("id", productId)
+      .single()
+    if (pErr || !product) {
+      console.error(`[inventory] adjustIncoming: product ${productId} not found, skipping`)
+      return
+    }
+    const { error: insErr } = await admin.from("inventory").insert({
+      product_id:      productId,
+      client_id:       product.client_id,
+      incoming_units:  Math.max(0, delta),
+      available_units: 0,
+      damaged_units:   0,
+    })
+    if (insErr) console.error(`[inventory] adjustIncoming insert failed: ${insErr.message}`)
+    return
+  }
+
+  const { error: updErr } = await admin
     .from("inventory")
     .update({ incoming_units: Math.max(0, inv.incoming_units + delta) })
     .eq("id", inv.id)
+  if (updErr) console.error(`[inventory] adjustIncoming update failed: ${updErr.message}`)
 }
 
 // ── listShipments ─────────────────────────────────────────────
@@ -244,30 +267,34 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
   // Verify ownership + load current state (user session, RLS-filtered)
   const { data: current, error: gErr } = await supabase
     .from("incoming_shipments")
-    .select("status, inventory_synced, incoming_shipment_items(product_id, expected_units)")
+    .select("status, inventory_synced, inventory_posted_at, incoming_shipment_items(product_id, expected_units)")
     .eq("id", id)
     .single()
   if (gErr) throw new Error(gErr.message)
 
   type DbStatus = "in_transit" | "arrived" | "received" | "partially_received" | "need_attention"
-  const currentDbStatus = current.status as DbStatus
-  const inventorySynced = current.inventory_synced as boolean
+  const currentDbStatus  = current.status as DbStatus
+  // Consider posted if either column indicates it (handles rows created before migration)
+  const inventoryPosted  =
+    (current.inventory_posted_at as string | null) != null ||
+    Boolean(current.inventory_synced)
 
   const newDbStatus: DbStatus = isAdmin
     ? (TO_DB[input.status] as DbStatus)
     : currentDbStatus   // clients cannot change status
 
-  const wasReceived    = RECEIVED_DB.includes(currentDbStatus)
-  const nowReceived    = RECEIVED_DB.includes(newDbStatus)
-  const doInventorySync = isAdmin && !inventorySynced && nowReceived && !wasReceived
+  const wasReceived     = RECEIVED_DB.includes(currentDbStatus)
+  const nowReceived     = RECEIVED_DB.includes(newDbStatus)
+  const doInventorySync = isAdmin && !inventoryPosted && nowReceived && !wasReceived
 
   // Update the shipment row (user session — RLS restricts clients to non-received only)
+  const now = new Date().toISOString()
   const { error: uErr } = await supabase
     .from("incoming_shipments")
     .update({
       status: newDbStatus,
       notes:  input.notes.trim() || null,
-      ...(doInventorySync ? { inventory_synced: true } : {}),
+      ...(doInventorySync ? { inventory_synced: true, inventory_posted_at: now } : {}),
     })
     .eq("id", id)
   if (uErr) throw new Error(uErr.message)
@@ -326,7 +353,7 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
 
   // ── Inventory adjustments ─────────────────────────────────
 
-  if (!inventorySynced) {
+  if (!inventoryPosted) {
     const oldMap: Record<string, number> = {}
     for (const item of oldItems) {
       oldMap[item.product_id] = (oldMap[item.product_id] ?? 0) + item.expected_units
@@ -338,12 +365,18 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
     const allIds = new Set([...Object.keys(oldMap), ...Object.keys(newMap)])
 
     if (doInventorySync) {
-      // Receive sync: subtract old incoming, add received + damaged
+      // Receive sync: move units from incoming → available/damaged
       for (const productId of allIds) {
         const oldExpected = oldMap[productId] ?? 0
         const newItem     = validProducts.find((p) => p.productId === productId)
         const received    = isAdmin && newItem ? newItem.receivedUnits : 0
         const damaged     = isAdmin && newItem ? newItem.damagedUnits  : 0
+
+        // Received: clear all reserved incoming
+        // Partially Received: only subtract what was actually processed
+        const incomingReduction = newDbStatus === "received"
+          ? oldExpected
+          : (received + damaged)
 
         const { data: inv } = await admin
           .from("inventory")
@@ -352,14 +385,30 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
           .maybeSingle()
 
         if (inv) {
-          await admin
+          const { error: invErr } = await admin
             .from("inventory")
             .update({
-              incoming_units:  Math.max(0, inv.incoming_units - oldExpected),
+              incoming_units:  Math.max(0, inv.incoming_units  - incomingReduction),
               available_units: inv.available_units + received,
               damaged_units:   inv.damaged_units   + damaged,
             })
             .eq("id", inv.id)
+          if (invErr) console.error(`[inventory] sync update failed for product ${productId}: ${invErr.message}`)
+        } else {
+          // No inventory row — create one with the received/damaged values
+          console.error(`[inventory] no row for product ${productId} at receive time — creating`)
+          const { data: prod } = await admin
+            .from("products").select("client_id").eq("id", productId).single()
+          if (prod) {
+            const { error: insErr } = await admin.from("inventory").insert({
+              product_id:      productId,
+              client_id:       prod.client_id,
+              incoming_units:  0,
+              available_units: received,
+              damaged_units:   damaged,
+            })
+            if (insErr) console.error(`[inventory] insert failed for product ${productId}: ${insErr.message}`)
+          }
         }
       }
     } else {
@@ -413,11 +462,15 @@ export async function softDeleteShipment(id: string): Promise<void> {
 
   const { data: current } = await supabase
     .from("incoming_shipments")
-    .select("inventory_synced, incoming_shipment_items(product_id, expected_units)")
+    .select("inventory_synced, inventory_posted_at, incoming_shipment_items(product_id, expected_units)")
     .eq("id", id)
     .single()
 
-  if (current && !(current.inventory_synced as boolean)) {
+  const alreadyPosted =
+    Boolean(current?.inventory_synced) ||
+    (current?.inventory_posted_at as string | null) != null
+
+  if (current && !alreadyPosted) {
     const items = (current.incoming_shipment_items ?? []) as {
       product_id: string
       expected_units: number
