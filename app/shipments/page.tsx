@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import {
   Search, SlidersHorizontal, Plus, Pencil, Archive, Trash2,
   Truck, PackageCheck, PackageOpen, AlertTriangle, AlertCircle,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, ChevronDown,
 } from "lucide-react"
 import { useRole, useShipments, useProducts, useIsMockMode } from "@/components/layout/app-shell"
 import { DataTable } from "@/components/ui/data-table"
@@ -15,16 +15,26 @@ import { EmptyState } from "@/components/ui/empty-state"
 import { StatCard } from "@/components/ui/stat-card"
 import { ConfirmModal } from "@/components/ui/confirm-modal"
 import { ShipmentModal } from "@/components/shipments/shipment-modal"
+import { ReceivingModal, type ReceivingResult } from "@/components/shipments/receiving-modal"
 import {
   archiveShipment,
   softDeleteShipment,
+  updateShipment,
 } from "@/app/shipments/actions"
 import { listProductClients } from "@/app/products/actions"
+import { listProducts }       from "@/app/products/actions"
 import type { Shipment, ShipmentStatus, DataTableColumn } from "@/lib/types"
 
 const PAGE_SIZE = 8
 
 const RECEIVED_STATUSES: ShipmentStatus[] = ["Received", "Partially Received"]
+const ALL_STATUSES: ShipmentStatus[] = [
+  "In Transit",
+  "Arrived",
+  "Received",
+  "Partially Received",
+  "Need Attention",
+]
 
 export default function ShipmentsPage() {
   const router     = useRouter()
@@ -39,6 +49,19 @@ export default function ShipmentsPage() {
   const [createOpen,   setCreateOpen]   = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<Shipment | null>(null)
   const [actionError,  setActionError]  = useState<string | null>(null)
+
+  // Status dropdown (fixed-position, one open at a time)
+  const [statusDropdown, setStatusDropdown] = useState<{
+    id: string
+    top: number
+    left: number
+  } | null>(null)
+
+  // Receiving modal
+  const [receivingTarget, setReceivingTarget] = useState<Shipment | null>(null)
+  const [receivingMode,   setReceivingMode]   = useState<"received" | "partially_received">("received")
+  const [receivingSaving, setReceivingSaving] = useState(false)
+  const [receivingError,  setReceivingError]  = useState<string | null>(null)
 
   function flashError(msg: string) {
     setActionError(msg)
@@ -56,10 +79,10 @@ export default function ShipmentsPage() {
   /* ── Stat card counts ────────────────────────────────── */
   const active = shipments.filter((s) => !s.isArchived)
   const counts = {
-    "In Transit":      active.filter((s) => s.status === "In Transit").length,
-    Arrived:           active.filter((s) => s.status === "Arrived").length,
-    Received:          active.filter((s) => RECEIVED_STATUSES.includes(s.status)).length,
-    "Need Attention":  active.filter((s) => s.status === "Need Attention").length,
+    "In Transit":     active.filter((s) => s.status === "In Transit").length,
+    Arrived:          active.filter((s) => s.status === "Arrived").length,
+    Received:         active.filter((s) => RECEIVED_STATUSES.includes(s.status)).length,
+    "Need Attention": active.filter((s) => s.status === "Need Attention").length,
   }
 
   /* ── Filtered + paginated ────────────────────────────── */
@@ -83,10 +106,9 @@ export default function ShipmentsPage() {
   const safePage   = Math.min(page, totalPages)
   const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
-  /* ── Actions ─────────────────────────────────────────── */
+  /* ── Shipment list actions ───────────────────────────── */
   function handleCreate(shipment: Shipment) {
     setShipments((prev) => [shipment, ...prev])
-    // Increment in-context product incoming counts to reflect DB change
     setProducts((prev) =>
       prev.map((p) => {
         const sp = shipment.products.find((x) => x.productId === p.id)
@@ -117,7 +139,6 @@ export default function ShipmentsPage() {
     try {
       await softDeleteShipment(id)
       setShipments((prev) => prev.filter((s) => s.id !== id))
-      // Reverse the incoming_units in context (action already reversed DB)
       const deleted = shipments.find((s) => s.id === id)
       if (deleted && !deleted.isInventoryUpdated) {
         setProducts((prev) =>
@@ -132,12 +153,153 @@ export default function ShipmentsPage() {
     }
   }
 
+  /* ── Status badge click / dropdown ──────────────────── */
+  function handleStatusBadgeClick(e: React.MouseEvent, shipment: Shipment) {
+    e.stopPropagation()
+    if (statusDropdown?.id === shipment.id) {
+      setStatusDropdown(null)
+      return
+    }
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setStatusDropdown({ id: shipment.id, top: rect.bottom + 4, left: rect.left })
+  }
+
+  function handleStatusSelect(newStatus: ShipmentStatus) {
+    const shipment = statusDropdown ? shipments.find((s) => s.id === statusDropdown.id) : null
+    setStatusDropdown(null)
+    if (!shipment || newStatus === shipment.status) return
+
+    if (RECEIVED_STATUSES.includes(newStatus) && !shipment.isInventoryUpdated) {
+      setReceivingTarget(shipment)
+      setReceivingMode(newStatus === "Received" ? "received" : "partially_received")
+    } else if (!RECEIVED_STATUSES.includes(newStatus)) {
+      handleQuickStatusChange(shipment, newStatus)
+    }
+  }
+
+  async function handleQuickStatusChange(shipment: Shipment, newStatus: ShipmentStatus) {
+    if (isMockMode) {
+      setShipments((prev) => prev.map((s) => (s.id === shipment.id ? { ...s, status: newStatus } : s)))
+      return
+    }
+    try {
+      const updated = await updateShipment(shipment.id, {
+        status:   newStatus,
+        notes:    shipment.notes,
+        products: shipment.products.map((sp) => ({
+          productId:     sp.productId,
+          units:         sp.units,
+          receivedUnits: sp.receivedUnits,
+          damagedUnits:  sp.damagedUnits,
+          notes:         sp.notes,
+        })),
+        tracking: shipment.tracking.map((t) => ({
+          carrier:        t.carrier,
+          trackingNumber: t.trackingNumber,
+          boxCount:       t.boxCount,
+          notes:          t.notes,
+        })),
+      })
+      setShipments((prev) => prev.map((s) => (s.id === shipment.id ? updated : s)))
+    } catch (err) {
+      flashError(err instanceof Error ? err.message : "Failed to update status.")
+    }
+  }
+
+  /* ── Receiving modal confirm ─────────────────────────── */
+  async function handleReceivingConfirm(results: ReceivingResult[]) {
+    if (!receivingTarget) return
+    const newStatus: ShipmentStatus = receivingMode === "received" ? "Received" : "Partially Received"
+
+    if (isMockMode) {
+      const updated: Shipment = {
+        ...receivingTarget,
+        status: newStatus,
+        isInventoryUpdated: true,
+        products: receivingTarget.products.map((sp) => {
+          const r = results.find((x) => x.productId === sp.productId)
+          return r ? { ...sp, receivedUnits: r.received, damagedUnits: r.damaged } : sp
+        }),
+      }
+      setShipments((prev) => prev.map((s) => (s.id === receivingTarget.id ? updated : s)))
+      setProducts((prev) =>
+        prev.map((p) => {
+          const r = results.find((x) => x.productId === p.id)
+          if (!r) return p
+          const incomingDelta = newStatus === "Received" ? r.expected : r.received + r.damaged
+          return {
+            ...p,
+            available: p.available + r.received,
+            incoming:  Math.max(0, p.incoming - incomingDelta),
+            damaged:   p.damaged + r.damaged,
+          }
+        })
+      )
+      setReceivingTarget(null)
+      return
+    }
+
+    setReceivingSaving(true)
+    setReceivingError(null)
+    try {
+      const updated = await updateShipment(receivingTarget.id, {
+        status:   newStatus,
+        notes:    receivingTarget.notes,
+        products: receivingTarget.products.map((sp) => {
+          const r = results.find((x) => x.productId === sp.productId)
+          return {
+            productId:     sp.productId,
+            units:         sp.units,
+            receivedUnits: r?.received ?? sp.receivedUnits,
+            damagedUnits:  r?.damaged  ?? sp.damagedUnits,
+            notes:         sp.notes,
+          }
+        }),
+        tracking: receivingTarget.tracking.map((t) => ({
+          carrier:        t.carrier,
+          trackingNumber: t.trackingNumber,
+          boxCount:       t.boxCount,
+          notes:          t.notes,
+        })),
+      })
+
+      setShipments((prev) => prev.map((s) => (s.id === receivingTarget.id ? updated : s)))
+
+      // Re-fetch products so Available/Incoming/Damaged columns update immediately
+      try {
+        const fresh = await listProducts()
+        setProducts(fresh)
+      } catch {
+        // Fallback: optimistic update with correct partial-receive delta
+        setProducts((prev) =>
+          prev.map((p) => {
+            const r = results.find((x) => x.productId === p.id)
+            if (!r) return p
+            const incomingDelta = newStatus === "Received" ? r.expected : r.received + r.damaged
+            return {
+              ...p,
+              available: p.available + r.received,
+              incoming:  Math.max(0, p.incoming - incomingDelta),
+              damaged:   p.damaged  + r.damaged,
+            }
+          })
+        )
+      }
+
+      setReceivingTarget(null)
+    } catch (err) {
+      setReceivingError(err instanceof Error ? err.message : "Failed to record receiving.")
+    } finally {
+      setReceivingSaving(false)
+    }
+  }
+
   function handleStatClick(status: ShipmentStatus | "all") {
     setStatusFilter((prev) => (prev === status ? "all" : status))
     setPage(1)
   }
 
-  /* ── Totals for each shipment ───────────────────────── */
+  /* ── Totals / helpers ────────────────────────────────── */
   function totalUnits(s: Shipment) {
     return s.products.reduce((sum, p) => sum + p.units, 0)
   }
@@ -199,7 +361,24 @@ export default function ShipmentsPage() {
     {
       id: "status",
       header: "Status",
-      cell: (row) => <StatusBadge status={row.status} />,
+      cell: (row) => {
+        // Non-admin or already-posted: static badge
+        if (role !== "admin" || row.isInventoryUpdated) {
+          return <StatusBadge status={row.status} />
+        }
+        // Admin on un-posted shipment: clickable badge with chevron
+        return (
+          <button
+            type="button"
+            onClick={(e) => handleStatusBadgeClick(e, row)}
+            className="inline-flex items-center gap-1 rounded-full hover:ring-2 hover:ring-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-400 transition-all"
+            title="Change status"
+          >
+            <StatusBadge status={row.status} />
+            <ChevronDown className="size-3 text-gray-400 shrink-0" />
+          </button>
+        )
+      },
     },
     {
       id: "created",
@@ -464,6 +643,53 @@ export default function ShipmentsPage() {
         confirmLabel="Delete"
         variant="danger"
       />
+
+      {/* Receiving modal (portal — rendered outside table overflow) */}
+      {receivingTarget && (
+        <ReceivingModal
+          isOpen={!!receivingTarget}
+          onClose={() => { setReceivingTarget(null); setReceivingError(null) }}
+          mode={receivingMode}
+          products={receivingTarget.products}
+          onConfirm={handleReceivingConfirm}
+          saving={receivingSaving}
+          error={receivingError}
+        />
+      )}
+
+      {/* Status dropdown — fixed positioned to avoid table overflow clipping */}
+      {statusDropdown && (
+        <>
+          {/* Invisible backdrop to dismiss on click-outside */}
+          <div
+            className="fixed inset-0 z-30"
+            onClick={() => setStatusDropdown(null)}
+          />
+          <div
+            className="fixed z-40 bg-white rounded-lg border border-gray-200 shadow-lg py-1 min-w-[180px]"
+            style={{ top: statusDropdown.top, left: statusDropdown.left }}
+          >
+            {ALL_STATUSES.map((s) => {
+              const ship = shipments.find((x) => x.id === statusDropdown.id)
+              const isCurrent = ship?.status === s
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => handleStatusSelect(s)}
+                  className={`w-full flex items-center gap-2 px-3 py-2 text-[13px] text-left hover:bg-gray-50 transition-colors ${
+                    isCurrent ? "text-blue-600 font-semibold" : "text-gray-700"
+                  }`}
+                >
+                  {isCurrent && <span className="size-1.5 rounded-full bg-blue-600 shrink-0" />}
+                  {!isCurrent && <span className="size-1.5 shrink-0" />}
+                  {s}
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
     </div>
   )
 }

@@ -68,7 +68,7 @@ function mapRow(row: any): Product {
     clientId: row.client_id,
     clientName: row.clients?.company_name ?? "",
     name: row.name,
-    sku: row.sku,
+    sku: row.sku ?? "",
     asin: row.asin_upc ?? "",
     fnsku: row.fnsku ?? "",
     notes: row.notes ?? "",
@@ -160,7 +160,7 @@ export async function createProduct(input: ProductFields): Promise<Product> {
     .insert({
       client_id: clientId,
       name: input.name.trim(),
-      sku: input.sku.trim(),
+      sku: input.sku.trim() || null,
       asin_upc: input.asin.trim() || null,
       fnsku: input.fnsku.trim() || null,
       notes: input.notes.trim() || null,
@@ -215,7 +215,7 @@ export async function updateProduct(
     .from("products")
     .update({
       name: input.name.trim(),
-      sku: input.sku.trim(),
+      sku: input.sku.trim() || null,
       asin_upc: input.asin.trim() || null,
       fnsku: input.fnsku.trim() || null,
       notes: input.notes.trim() || null,

@@ -78,7 +78,7 @@ export type Database = {
           id: string
           client_id: string
           name: string
-          sku: string
+          sku: string | null
           asin_upc: string | null
           fnsku: string | null
           image_url: string | null
@@ -93,7 +93,7 @@ export type Database = {
           id?: string
           client_id: string
           name: string
-          sku: string
+          sku?: string | null
           asin_upc?: string | null
           fnsku?: string | null
           image_url?: string | null
@@ -108,7 +108,7 @@ export type Database = {
           id?: string
           client_id?: string
           name?: string
-          sku?: string
+          sku?: string | null
           asin_upc?: string | null
           fnsku?: string | null
           image_url?: string | null

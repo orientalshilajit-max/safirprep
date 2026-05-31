@@ -271,11 +271,10 @@ export function ProductModal({
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-[12px] font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
-              SKU <span className="text-red-500">*</span>
+              SKU
             </label>
             <input
               type="text"
-              required
               value={form.sku}
               onChange={(e) => set("sku", e.target.value)}
               placeholder="e.g. WE-1000"
