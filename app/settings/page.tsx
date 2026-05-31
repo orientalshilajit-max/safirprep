@@ -1,100 +1,45 @@
 "use client"
 
-import { useState, useRef, useCallback } from "react"
+import { useState, useRef, useCallback, useEffect } from "react"
 import {
-  Building2,
-  Truck,
-  Wrench,
-  FileText,
-  Users,
-  ChevronUp,
-  ChevronDown,
-  Pencil,
-  Archive,
-  Plus,
-  Check,
-  X,
-  ImagePlus,
-  GripVertical,
-  Settings,
-  ShieldCheck,
-  Mail,
-  KeyRound,
+  Building2, Truck, Wrench, FileText, Users,
+  ChevronUp, ChevronDown, Pencil, Trash2, Plus, Check, X,
+  ImagePlus, GripVertical, Settings, ShieldCheck, Mail,
+  KeyRound, Eye, EyeOff, AlertTriangle, AlertCircle,
 } from "lucide-react"
-import { useRole } from "@/components/layout/app-shell"
+import { useRole, useIsMockMode } from "@/components/layout/app-shell"
+import { ConfirmModal }           from "@/components/ui/confirm-modal"
 import { cn } from "@/lib/utils"
-
-/* ─────────────────────────────────────────────────────────
-   Types
-───────────────────────────────────────────────────────── */
-type ListItem = { id: string; name: string; archived: boolean }
-
-type CompanyInfo = {
-  name: string
-  email: string
-  phone: string
-  address: string
-  website: string
-}
-
-type InvoiceSettings = {
-  dueDays: number
-  paymentInstructions: string
-  invoiceNotes: string
-}
-
-/* ─────────────────────────────────────────────────────────
-   Initial state
-───────────────────────────────────────────────────────── */
-const defaultCompany: CompanyInfo = {
-  name: "Safir Logistics",
-  email: "info@safirlogs.com",
-  phone: "(310) 555-0100",
-  address: "5000 Commerce Dr, Suite 200\nLos Angeles, CA 90058",
-  website: "https://safirlogs.com",
-}
-
-const defaultCarriers: ListItem[] = [
-  { id: "cr1", name: "UPS", archived: false },
-  { id: "cr2", name: "FedEx", archived: false },
-  { id: "cr3", name: "DHL", archived: false },
-  { id: "cr4", name: "USPS", archived: false },
-  { id: "cr5", name: "OnTrac", archived: false },
-  { id: "cr6", name: "Amazon Freight", archived: false },
-  { id: "cr7", name: "Amazon Delivery", archived: false },
-  { id: "cr8", name: "LTL Freight", archived: false },
-  { id: "cr9", name: "Local Delivery", archived: false },
-  { id: "cr10", name: "Other", archived: false },
-]
-
-const defaultServiceTypes: ListItem[] = [
-  { id: "st1", name: "FBA Prep", archived: false },
-  { id: "st2", name: "FBM Fulfillment", archived: false },
-  { id: "st3", name: "Labeling", archived: false },
-  { id: "st4", name: "Bundling", archived: false },
-  { id: "st5", name: "Inspection", archived: false },
-  { id: "st6", name: "Forwarding", archived: false },
-  { id: "st7", name: "Storage", archived: false },
-  { id: "st8", name: "Returns", archived: false },
-  { id: "st9", name: "Other", archived: false },
-]
-
-const defaultInvoice: InvoiceSettings = {
-  dueDays: 14,
-  paymentInstructions:
-    "Please remit payment via ACH, wire transfer, or check made payable to Safir Logistics LLC. Reference your invoice number in all payment details. Contact billing@safirlogs.com with questions.",
-  invoiceNotes: "",
-}
+import {
+  fetchSettings,
+  saveCompanyInfo,
+  uploadLogo,
+  upsertCarrier,
+  deleteCarrier,
+  checkCarrierUsage,
+  reorderCarriers,
+  upsertServiceType,
+  deleteServiceType,
+  checkServiceTypeUsage,
+  reorderServiceTypes,
+  saveInvoiceSettings,
+  saveUserSettings,
+  type SettingsCarrier,
+  type SettingsServiceType,
+  type SettingsCompany,
+  type SettingsInvoice,
+  type SettingsUsers,
+} from "@/app/settings/actions"
 
 /* ─────────────────────────────────────────────────────────
    Section nav
 ───────────────────────────────────────────────────────── */
 const SECTIONS = [
-  { id: "company",  label: "Company Info",   icon: Building2 },
-  { id: "carriers", label: "Carriers",       icon: Truck },
-  { id: "services", label: "Service Types",  icon: Wrench },
-  { id: "invoice",  label: "Invoice",        icon: FileText },
-  { id: "users",    label: "Users",          icon: Users },
+  { id: "company",  label: "Company Info",  icon: Building2 },
+  { id: "carriers", label: "Carriers",      icon: Truck },
+  { id: "services", label: "Service Types", icon: Wrench },
+  { id: "invoice",  label: "Invoice",       icon: FileText },
+  { id: "users",    label: "Users",         icon: Users },
 ]
 
 /* ─────────────────────────────────────────────────────────
@@ -102,17 +47,9 @@ const SECTIONS = [
 ───────────────────────────────────────────────────────── */
 
 function SectionCard({
-  id,
-  icon: Icon,
-  title,
-  description,
-  children,
+  id, icon: Icon, title, description, children,
 }: {
-  id: string
-  icon: React.ElementType
-  title: string
-  description: string
-  children: React.ReactNode
+  id: string; icon: React.ElementType; title: string; description: string; children: React.ReactNode
 }) {
   return (
     <div id={id} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden scroll-mt-4">
@@ -130,103 +67,211 @@ function SectionCard({
   )
 }
 
-function SaveButton({ saved, onClick }: { saved: boolean; onClick: () => void }) {
+function SaveButton({
+  saved, saving, onClick, label = "Save Changes",
+}: {
+  saved: boolean; saving?: boolean; onClick: () => void; label?: string
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
+      disabled={saving}
       className={cn(
-        "flex items-center gap-1.5 px-4 py-2 text-[13px] font-semibold rounded-lg transition-all",
+        "flex items-center gap-1.5 px-4 py-2 text-[13px] font-semibold rounded-lg transition-all disabled:opacity-60",
         saved
           ? "bg-green-600 text-white"
           : "bg-blue-600 hover:bg-blue-700 text-white"
       )}
     >
       {saved ? <Check className="size-3.5" /> : null}
-      {saved ? "Saved!" : "Save Changes"}
+      {saving ? "Saving…" : saved ? "Saved!" : label}
     </button>
   )
 }
 
 function useSaveFlash() {
-  const [saved, setSaved] = useState(false)
-  const trigger = useCallback(() => {
-    setSaved(true)
-    setTimeout(() => setSaved(false), 2000)
+  const [saved,  setSaved]  = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [error,  setError]  = useState<string | null>(null)
+
+  const run = useCallback(async (fn: () => Promise<void>) => {
+    setSaving(true)
+    setError(null)
+    try {
+      await fn()
+      setSaved(true)
+      setTimeout(() => setSaved(false), 2000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed.")
+    } finally {
+      setSaving(false)
+    }
   }, [])
-  return { saved, trigger }
+
+  return { saved, saving, error, setError, run }
 }
 
-/* ── Managed list (carriers / service types) ───────────── */
-function ManagedList({
-  items,
-  setItems,
-  noun,
-}: {
-  items: ListItem[]
-  setItems: React.Dispatch<React.SetStateAction<ListItem[]>>
-  noun: string
+function Field({ label, hint, children }: {
+  label: string; hint?: string; children: React.ReactNode
 }) {
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [editName, setEditName] = useState("")
-  const [adding, setAdding] = useState(false)
-  const [addName, setAddName] = useState("")
-  const [showArchived, setShowArchived] = useState(false)
+  return (
+    <div>
+      <label className="block text-[12px] font-semibold text-gray-700 mb-1.5">{label}</label>
+      {children}
+      {hint && <p className="mt-1 text-[11px] text-gray-400">{hint}</p>}
+    </div>
+  )
+}
+
+const inputCls =
+  "w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 bg-white"
+const textareaCls =
+  "w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 resize-none bg-white"
+
+/* ── Inline error banner ───────────────────────────────── */
+function InlineError({ msg }: { msg: string | null }) {
+  if (!msg) return null
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5">
+      <AlertCircle className="size-3.5 text-red-500 mt-0.5 shrink-0" />
+      <p className="text-[12px] text-red-600">{msg}</p>
+    </div>
+  )
+}
+
+/* ─────────────────────────────────────────────────────────
+   CarrierList
+───────────────────────────────────────────────────────── */
+function CarrierList({
+  initial, isMockMode,
+}: {
+  initial: SettingsCarrier[]; isMockMode: boolean
+}) {
+  const [items,       setItems]       = useState<SettingsCarrier[]>(initial)
+  const [editingId,   setEditingId]   = useState<string | null>(null)
+  const [editName,    setEditName]    = useState("")
+  const [adding,      setAdding]      = useState(false)
+  const [addName,     setAddName]     = useState("")
+  const [saving,      setSaving]      = useState<string | null>(null) // id being saved
+  const [error,       setError]       = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<SettingsCarrier | null>(null)
+  const [deleteMsg,   setDeleteMsg]   = useState("")
+  const [deleting,    setDeleting]    = useState(false)
+  const [checkingId,  setCheckingId]  = useState<string | null>(null)
   const addRef = useRef<HTMLInputElement>(null)
 
-  const active = items.filter((i) => !i.archived)
-  const archived = items.filter((i) => i.archived)
-
-  function startEdit(item: ListItem) {
+  function startEdit(item: SettingsCarrier) {
     setEditingId(item.id)
     setEditName(item.name)
+    setError(null)
   }
 
-  function commitEdit(id: string) {
+  async function commitEdit(item: SettingsCarrier) {
     if (!editName.trim()) { cancelEdit(); return }
-    setItems((prev) => prev.map((i) => i.id === id ? { ...i, name: editName.trim() } : i))
-    setEditingId(null)
+    if (editName.trim() === item.name) { cancelEdit(); return }
+    if (isMockMode) {
+      setItems((prev) => prev.map((i) => i.id === item.id ? { ...i, name: editName.trim() } : i))
+      setEditingId(null)
+      return
+    }
+    setSaving(item.id)
+    try {
+      const updated = await upsertCarrier({ id: item.id, name: editName.trim(), sortOrder: item.sortOrder })
+      setItems((prev) => prev.map((i) => i.id === item.id ? updated : i))
+      setEditingId(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save carrier.")
+    } finally {
+      setSaving(null)
+    }
   }
 
-  function cancelEdit() {
-    setEditingId(null)
-    setEditName("")
-  }
-
-  function archiveItem(id: string) {
-    setItems((prev) => prev.map((i) => i.id === id ? { ...i, archived: true } : i))
-  }
-
-  function restoreItem(id: string) {
-    setItems((prev) => prev.map((i) => i.id === id ? { ...i, archived: false } : i))
-  }
+  function cancelEdit() { setEditingId(null); setEditName("") }
 
   function moveItem(idx: number, dir: -1 | 1) {
-    const next = [...active]
+    const next   = [...items]
     const target = idx + dir
     if (target < 0 || target >= next.length) return
     ;[next[idx], next[target]] = [next[target], next[idx]]
-    setItems([...next, ...archived])
+    // Reassign sort_order by position
+    const reordered = next.map((item, i) => ({ ...item, sortOrder: i + 1 }))
+    setItems(reordered)
+    if (!isMockMode) {
+      reorderCarriers(reordered.map((c) => ({ id: c.id, sortOrder: c.sortOrder }))).catch(() => {})
+    }
   }
 
-  function commitAdd() {
+  async function commitAdd() {
     if (!addName.trim()) { setAdding(false); setAddName(""); return }
-    setItems((prev) => [
-      ...prev,
-      { id: `item-${Date.now()}`, name: addName.trim(), archived: false },
-    ])
-    setAddName("")
-    setAdding(false)
+    if (isMockMode) {
+      setItems((prev) => [
+        ...prev,
+        { id: `mock-${Date.now()}`, name: addName.trim(), isActive: true, sortOrder: prev.length + 1 },
+      ])
+      setAdding(false); setAddName("")
+      return
+    }
+    setSaving("new")
+    try {
+      const created = await upsertCarrier({ name: addName.trim(), sortOrder: items.length + 1 })
+      setItems((prev) => [...prev, created])
+      setAdding(false); setAddName("")
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add carrier.")
+    } finally {
+      setSaving(null)
+    }
   }
 
-  function startAdding() {
-    setAdding(true)
-    setTimeout(() => addRef.current?.focus(), 30)
+  async function handleDeleteClick(item: SettingsCarrier) {
+    setError(null)
+    if (isMockMode) {
+      setDeleteMsg(`Permanently delete "${item.name}"? This cannot be undone.`)
+      setDeleteTarget(item)
+      return
+    }
+    setCheckingId(item.id)
+    try {
+      const count = await checkCarrierUsage(item.id)
+      let msg = `Permanently delete "${item.name}"? This cannot be undone.`
+      if (count > 0) {
+        msg = `This carrier is used in ${count} existing shipment${count > 1 ? "s" : ""}. Existing shipment records will keep the carrier name, but this carrier will be removed from future dropdowns.\n\nDelete anyway?`
+      }
+      setDeleteMsg(msg)
+      setDeleteTarget(item)
+    } catch {
+      setDeleteMsg(`Permanently delete "${item.name}"? This cannot be undone.`)
+      setDeleteTarget(item)
+    } finally {
+      setCheckingId(null)
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    const id = deleteTarget.id
+    if (isMockMode) {
+      setItems((prev) => prev.filter((i) => i.id !== id))
+      setDeleteTarget(null)
+      return
+    }
+    setDeleting(true)
+    try {
+      await deleteCarrier(id)
+      setItems((prev) => prev.filter((i) => i.id !== id))
+      setDeleteTarget(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete carrier.")
+    } finally {
+      setDeleting(false)
+    }
   }
 
   return (
     <div className="space-y-1">
-      {active.map((item, idx) => (
+      <InlineError msg={error} />
+      {items.map((item, idx) => (
         <div
           key={item.id}
           className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-100 bg-gray-50 hover:bg-gray-100/60 group transition-colors"
@@ -240,21 +285,19 @@ function ManagedList({
                 value={editName}
                 onChange={(e) => setEditName(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") commitEdit(item.id)
+                  if (e.key === "Enter")  commitEdit(item)
                   if (e.key === "Escape") cancelEdit()
                 }}
                 className="flex-1 text-[13px] bg-white border border-blue-400 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
               />
               <button
-                onClick={() => commitEdit(item.id)}
-                className="flex size-6 items-center justify-center rounded text-green-600 hover:bg-green-50 transition-colors"
+                onClick={() => commitEdit(item)}
+                disabled={saving === item.id}
+                className="flex size-6 items-center justify-center rounded text-green-600 hover:bg-green-50 disabled:opacity-50"
               >
                 <Check className="size-3.5" />
               </button>
-              <button
-                onClick={cancelEdit}
-                className="flex size-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100 transition-colors"
-              >
+              <button onClick={cancelEdit} className="flex size-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100">
                 <X className="size-3.5" />
               </button>
             </>
@@ -265,32 +308,33 @@ function ManagedList({
                 <button
                   onClick={() => moveItem(idx, -1)}
                   disabled={idx === 0}
-                  className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed"
                   title="Move up"
                 >
                   <ChevronUp className="size-3.5" />
                 </button>
                 <button
                   onClick={() => moveItem(idx, 1)}
-                  disabled={idx === active.length - 1}
-                  className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  disabled={idx === items.length - 1}
+                  className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed"
                   title="Move down"
                 >
                   <ChevronDown className="size-3.5" />
                 </button>
                 <button
                   onClick={() => startEdit(item)}
-                  className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+                  className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-blue-600 hover:bg-blue-50"
                   title="Edit"
                 >
                   <Pencil className="size-3.5" />
                 </button>
                 <button
-                  onClick={() => archiveItem(item.id)}
-                  className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                  title="Archive"
+                  onClick={() => handleDeleteClick(item)}
+                  disabled={checkingId === item.id}
+                  className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-50"
+                  title="Delete permanently"
                 >
-                  <Archive className="size-3.5" />
+                  <Trash2 className="size-3.5" />
                 </button>
               </div>
             </>
@@ -304,120 +348,460 @@ function ManagedList({
           <GripVertical className="size-3.5 text-blue-200 shrink-0" />
           <input
             ref={addRef}
+            autoFocus
             value={addName}
             onChange={(e) => setAddName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") commitAdd()
+              if (e.key === "Enter")  commitAdd()
               if (e.key === "Escape") { setAdding(false); setAddName("") }
             }}
-            placeholder={`New ${noun}…`}
+            placeholder="New carrier…"
             className="flex-1 text-[13px] bg-white border border-blue-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400 placeholder:text-gray-400"
           />
           <button
             onClick={commitAdd}
-            className="flex size-6 items-center justify-center rounded text-green-600 hover:bg-green-50 transition-colors"
+            disabled={saving === "new"}
+            className="flex size-6 items-center justify-center rounded text-green-600 hover:bg-green-50 disabled:opacity-50"
           >
             <Check className="size-3.5" />
           </button>
           <button
             onClick={() => { setAdding(false); setAddName("") }}
-            className="flex size-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100 transition-colors"
+            className="flex size-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100"
           >
             <X className="size-3.5" />
           </button>
         </div>
       ) : (
         <button
-          onClick={startAdding}
+          onClick={() => { setAdding(true); setError(null) }}
           className="flex items-center gap-1.5 w-full px-3 py-2 rounded-lg border border-dashed border-gray-200 text-[13px] text-gray-400 hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50 transition-colors"
         >
           <Plus className="size-3.5" />
-          Add {noun}
+          Add carrier
         </button>
       )}
 
-      {/* Archived section */}
-      {archived.length > 0 && (
-        <div className="pt-1">
-          <button
-            onClick={() => setShowArchived((v) => !v)}
-            className="flex items-center gap-1 text-[11px] text-gray-400 hover:text-gray-600 transition-colors"
-          >
-            <Archive className="size-3" />
-            {showArchived ? "Hide" : "Show"} {archived.length} archived
-          </button>
-          {showArchived && (
-            <div className="mt-1 space-y-1">
-              {archived.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-100 bg-gray-50 opacity-60"
-                >
-                  <GripVertical className="size-3.5 text-gray-200 shrink-0" />
-                  <span className="flex-1 text-[13px] text-gray-400 line-through">{item.name}</span>
-                  <button
-                    onClick={() => restoreItem(item.id)}
-                    className="text-[11px] font-medium text-blue-500 hover:text-blue-700 transition-colors"
-                  >
-                    Restore
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      <ConfirmModal
+        isOpen={!!deleteTarget}
+        onClose={() => !deleting && setDeleteTarget(null)}
+        onConfirm={confirmDelete}
+        title="Delete carrier?"
+        message={deleteMsg}
+        confirmLabel={deleting ? "Deleting…" : "Delete Permanently"}
+        variant="danger"
+      />
     </div>
   )
 }
 
 /* ─────────────────────────────────────────────────────────
-   Field helpers
+   ServiceList
 ───────────────────────────────────────────────────────── */
-function Field({
-  label,
-  hint,
-  children,
+type ServiceEditState = {
+  name: string
+  price: string
+  visibleToCustomers: boolean
+}
+
+function ServiceList({
+  initial, isMockMode,
 }: {
-  label: string
-  hint?: string
-  children: React.ReactNode
+  initial: SettingsServiceType[]; isMockMode: boolean
 }) {
+  const [items,       setItems]       = useState<SettingsServiceType[]>(initial)
+  const [editingId,   setEditingId]   = useState<string | null>(null)
+  const [editState,   setEditState]   = useState<ServiceEditState>({ name: "", price: "0", visibleToCustomers: true })
+  const [adding,      setAdding]      = useState(false)
+  const [addState,    setAddState]    = useState<ServiceEditState>({ name: "", price: "0", visibleToCustomers: true })
+  const [saving,      setSaving]      = useState<string | null>(null)
+  const [error,       setError]       = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<SettingsServiceType | null>(null)
+  const [deleteMsg,   setDeleteMsg]   = useState("")
+  const [deleting,    setDeleting]    = useState(false)
+  const [checkingId,  setCheckingId]  = useState<string | null>(null)
+
+  function startEdit(item: SettingsServiceType) {
+    setEditingId(item.id)
+    setEditState({ name: item.name, price: String(item.price), visibleToCustomers: item.visibleToCustomers })
+    setError(null)
+  }
+
+  async function commitEdit(item: SettingsServiceType) {
+    const name  = editState.name.trim()
+    const price = Math.max(0, parseFloat(editState.price) || 0)
+    if (!name) { cancelEdit(); return }
+    if (isMockMode) {
+      setItems((prev) =>
+        prev.map((i) => i.id === item.id
+          ? { ...i, name, price, visibleToCustomers: editState.visibleToCustomers }
+          : i)
+      )
+      setEditingId(null)
+      return
+    }
+    setSaving(item.id)
+    try {
+      const updated = await upsertServiceType({
+        id: item.id, name, price,
+        visibleToCustomers: editState.visibleToCustomers,
+        sortOrder: item.sortOrder,
+      })
+      setItems((prev) => prev.map((i) => i.id === item.id ? updated : i))
+      setEditingId(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save service.")
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  function cancelEdit() { setEditingId(null) }
+
+  function moveItem(idx: number, dir: -1 | 1) {
+    const next   = [...items]
+    const target = idx + dir
+    if (target < 0 || target >= next.length) return
+    ;[next[idx], next[target]] = [next[target], next[idx]]
+    const reordered = next.map((item, i) => ({ ...item, sortOrder: i + 1 }))
+    setItems(reordered)
+    if (!isMockMode) {
+      reorderServiceTypes(reordered.map((s) => ({ id: s.id, sortOrder: s.sortOrder }))).catch(() => {})
+    }
+  }
+
+  async function commitAdd() {
+    const name  = addState.name.trim()
+    const price = Math.max(0, parseFloat(addState.price) || 0)
+    if (!name) { setAdding(false); setAddState({ name: "", price: "0", visibleToCustomers: true }); return }
+    if (isMockMode) {
+      setItems((prev) => [
+        ...prev,
+        { id: `mock-${Date.now()}`, name, price, visibleToCustomers: addState.visibleToCustomers, isActive: true, sortOrder: prev.length + 1 },
+      ])
+      setAdding(false)
+      setAddState({ name: "", price: "0", visibleToCustomers: true })
+      return
+    }
+    setSaving("new")
+    try {
+      const created = await upsertServiceType({
+        name, price, visibleToCustomers: addState.visibleToCustomers,
+        sortOrder: items.length + 1,
+      })
+      setItems((prev) => [...prev, created])
+      setAdding(false)
+      setAddState({ name: "", price: "0", visibleToCustomers: true })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to add service.")
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  async function handleDeleteClick(item: SettingsServiceType) {
+    setError(null)
+    if (isMockMode) {
+      setDeleteMsg(`Permanently delete "${item.name}"? This cannot be undone.`)
+      setDeleteTarget(item)
+      return
+    }
+    setCheckingId(item.id)
+    try {
+      const count = await checkServiceTypeUsage(item.id)
+      let msg = `Permanently delete "${item.name}"? This cannot be undone.`
+      if (count > 0) {
+        msg = `This service is used in ${count} existing request${count > 1 ? "s" : ""}. Deleting it may affect historical records.\n\nDelete anyway?`
+      }
+      setDeleteMsg(msg)
+      setDeleteTarget(item)
+    } catch {
+      setDeleteMsg(`Permanently delete "${item.name}"? This cannot be undone.`)
+      setDeleteTarget(item)
+    } finally {
+      setCheckingId(null)
+    }
+  }
+
+  async function confirmDelete() {
+    if (!deleteTarget) return
+    const id = deleteTarget.id
+    if (isMockMode) {
+      setItems((prev) => prev.filter((i) => i.id !== id))
+      setDeleteTarget(null)
+      return
+    }
+    setDeleting(true)
+    try {
+      await deleteServiceType(id)
+      setItems((prev) => prev.filter((i) => i.id !== id))
+      setDeleteTarget(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete service.")
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  function ServiceRow({ item, idx }: { item: SettingsServiceType; idx: number }) {
+    if (editingId === item.id) {
+      return (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50">
+          <GripVertical className="size-3.5 text-blue-200 shrink-0" />
+          <input
+            autoFocus
+            value={editState.name}
+            onChange={(e) => setEditState((s) => ({ ...s, name: e.target.value }))}
+            onKeyDown={(e) => { if (e.key === "Escape") cancelEdit() }}
+            placeholder="Service name"
+            className="flex-1 min-w-0 text-[13px] bg-white border border-blue-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+          />
+          <div className="flex items-center gap-1 shrink-0">
+            <span className="text-[13px] text-gray-500">$</span>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={editState.price}
+              onChange={(e) => setEditState((s) => ({ ...s, price: e.target.value }))}
+              className="w-20 text-[13px] bg-white border border-blue-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => setEditState((s) => ({ ...s, visibleToCustomers: !s.visibleToCustomers }))}
+            title={editState.visibleToCustomers ? "Visible to clients" : "Hidden from clients"}
+            className={cn(
+              "flex size-6 items-center justify-center rounded transition-colors shrink-0",
+              editState.visibleToCustomers
+                ? "text-blue-600 hover:bg-blue-100"
+                : "text-gray-300 hover:bg-gray-100"
+            )}
+          >
+            {editState.visibleToCustomers ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+          </button>
+          <button
+            onClick={() => commitEdit(item)}
+            disabled={saving === item.id}
+            className="flex size-6 items-center justify-center rounded text-green-600 hover:bg-green-50 disabled:opacity-50"
+          >
+            <Check className="size-3.5" />
+          </button>
+          <button onClick={cancelEdit} className="flex size-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100">
+            <X className="size-3.5" />
+          </button>
+        </div>
+      )
+    }
+
+    return (
+      <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-100 bg-gray-50 hover:bg-gray-100/60 group transition-colors">
+        <GripVertical className="size-3.5 text-gray-300 shrink-0" />
+        <span className="flex-1 min-w-0 text-[13px] text-gray-800 truncate">{item.name}</span>
+        <span className="text-[13px] font-medium text-gray-600 tabular-nums shrink-0">
+          {item.price > 0 ? `$${item.price.toFixed(2)}` : <span className="text-gray-300">—</span>}
+        </span>
+        <span
+          title={item.visibleToCustomers ? "Visible to clients" : "Hidden from clients"}
+          className={cn("shrink-0", item.visibleToCustomers ? "text-blue-400" : "text-gray-200")}
+        >
+          {item.visibleToCustomers
+            ? <Eye className="size-3.5" />
+            : <EyeOff className="size-3.5" />}
+        </span>
+        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={() => moveItem(idx, -1)}
+            disabled={idx === 0}
+            className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Move up"
+          >
+            <ChevronUp className="size-3.5" />
+          </button>
+          <button
+            onClick={() => moveItem(idx, 1)}
+            disabled={idx === items.length - 1}
+            className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Move down"
+          >
+            <ChevronDown className="size-3.5" />
+          </button>
+          <button
+            onClick={() => startEdit(item)}
+            className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-blue-600 hover:bg-blue-50"
+            title="Edit"
+          >
+            <Pencil className="size-3.5" />
+          </button>
+          <button
+            onClick={() => handleDeleteClick(item)}
+            disabled={checkingId === item.id}
+            className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-50"
+            title="Delete permanently"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
-    <div>
-      <label className="block text-[12px] font-semibold text-gray-700 mb-1.5">{label}</label>
-      {children}
-      {hint && <p className="mt-1 text-[11px] text-gray-400">{hint}</p>}
+    <div className="space-y-1">
+      {/* Column header hints */}
+      <div className="flex items-center gap-2 px-3 pb-1">
+        <span className="w-3.5 shrink-0" />
+        <span className="flex-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Name</span>
+        <span className="w-24 text-right text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Price</span>
+        <span className="w-6 text-center text-[10px] font-semibold text-gray-400 uppercase tracking-wide" title="Visible to clients">
+          <Eye className="size-3 inline" />
+        </span>
+        <span className="w-[88px] shrink-0" />
+      </div>
+
+      <InlineError msg={error} />
+      {items.map((item, idx) => (
+        <ServiceRow key={item.id} item={item} idx={idx} />
+      ))}
+
+      {/* Add row */}
+      {adding ? (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50">
+          <GripVertical className="size-3.5 text-blue-200 shrink-0" />
+          <input
+            autoFocus
+            value={addState.name}
+            onChange={(e) => setAddState((s) => ({ ...s, name: e.target.value }))}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") { setAdding(false); setAddState({ name: "", price: "0", visibleToCustomers: true }) }
+            }}
+            placeholder="Service name…"
+            className="flex-1 min-w-0 text-[13px] bg-white border border-blue-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400 placeholder:text-gray-400"
+          />
+          <div className="flex items-center gap-1 shrink-0">
+            <span className="text-[13px] text-gray-500">$</span>
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={addState.price}
+              onChange={(e) => setAddState((s) => ({ ...s, price: e.target.value }))}
+              className="w-20 text-[13px] bg-white border border-blue-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => setAddState((s) => ({ ...s, visibleToCustomers: !s.visibleToCustomers }))}
+            title={addState.visibleToCustomers ? "Visible to clients" : "Hidden from clients"}
+            className={cn(
+              "flex size-6 items-center justify-center rounded transition-colors shrink-0",
+              addState.visibleToCustomers ? "text-blue-600 hover:bg-blue-100" : "text-gray-300 hover:bg-gray-100"
+            )}
+          >
+            {addState.visibleToCustomers ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+          </button>
+          <button
+            onClick={commitAdd}
+            disabled={saving === "new"}
+            className="flex size-6 items-center justify-center rounded text-green-600 hover:bg-green-50 disabled:opacity-50"
+          >
+            <Check className="size-3.5" />
+          </button>
+          <button
+            onClick={() => { setAdding(false); setAddState({ name: "", price: "0", visibleToCustomers: true }) }}
+            className="flex size-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100"
+          >
+            <X className="size-3.5" />
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => { setAdding(true); setError(null) }}
+          className="flex items-center gap-1.5 w-full px-3 py-2 rounded-lg border border-dashed border-gray-200 text-[13px] text-gray-400 hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50 transition-colors"
+        >
+          <Plus className="size-3.5" />
+          Add service type
+        </button>
+      )}
+
+      <ConfirmModal
+        isOpen={!!deleteTarget}
+        onClose={() => !deleting && setDeleteTarget(null)}
+        onConfirm={confirmDelete}
+        title="Delete service type?"
+        message={deleteMsg}
+        confirmLabel={deleting ? "Deleting…" : "Delete Permanently"}
+        variant="danger"
+      />
     </div>
   )
 }
 
-const inputCls =
-  "w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 bg-white"
-
-const textareaCls =
-  "w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 resize-none bg-white"
+/* ─────────────────────────────────────────────────────────
+   Page defaults
+───────────────────────────────────────────────────────── */
+const DEFAULT_COMPANY: SettingsCompany = {
+  companyName: "Safir Logistics",
+  email:   "info@safirlogs.com",
+  phone:   "(310) 555-0100",
+  address: "5000 Commerce Dr, Suite 200\nLos Angeles, CA 90058",
+  website: "https://safirlogs.com",
+  logoUrl: null,
+}
+const DEFAULT_INVOICE: SettingsInvoice = {
+  dueDays: 14,
+  paymentInstructions:
+    "Please remit payment via ACH, wire transfer, or check made payable to Safir Logistics LLC. Reference your invoice number in all payment details. Contact billing@safirlogs.com with questions.",
+  invoiceNotes: "",
+}
+const DEFAULT_USERS: SettingsUsers = {
+  inviteSubject: "You're invited to the Safir client portal",
+  inviteMessage:
+    "Hi [Contact Name],\n\nYou've been invited to access your logistics dashboard at Safir. Click the link below to set up your account.\n\nIf you have any questions, reply to this email.\n\n— The Safir Team",
+}
 
 /* ─────────────────────────────────────────────────────────
    Page
 ───────────────────────────────────────────────────────── */
 export default function SettingsPage() {
-  const { role } = useRole()
+  const { role }   = useRole()
+  const isMockMode = useIsMockMode()
 
-  // All hooks must come before any conditional return.
-  const [company, setCompany] = useState<CompanyInfo>(defaultCompany)
-  const [carriers, setCarriers] = useState<ListItem[]>(defaultCarriers)
-  const [serviceTypes, setServiceTypes] = useState<ListItem[]>(defaultServiceTypes)
-  const [invoice, setInvoice] = useState<InvoiceSettings>(defaultInvoice)
-  const [inviteSubject, setInviteSubject] = useState("You're invited to the Safir client portal")
-  const [inviteMessage, setInviteMessage] = useState(
-    "Hi [Contact Name],\n\nYou've been invited to access your logistics dashboard at Safir. Click the link below to set up your account.\n\nIf you have any questions, reply to this email.\n\n— The Safir Team"
-  )
+  // All hooks before any conditional return
+  // loading starts false in mock mode (nothing to fetch), true otherwise
+  const [loading,       setLoading]       = useState(() => !isMockMode)
+  const [loadError,     setLoadError]     = useState<string | null>(null)
+  const [company,       setCompany]       = useState<SettingsCompany>(DEFAULT_COMPANY)
+  const [logoPreview,   setLogoPreview]   = useState<string | null>(null)
+  const [logoUploading, setLogoUploading] = useState(false)
+  const [logoError,     setLogoError]     = useState<string | null>(null)
+  const [invoice,       setInvoice]       = useState<SettingsInvoice>(DEFAULT_INVOICE)
+  const [userSettings,  setUserSettings]  = useState<SettingsUsers>(DEFAULT_USERS)
+  const [initCarriers,  setInitCarriers]  = useState<SettingsCarrier[]>([])
+  const [initServices,  setInitServices]  = useState<SettingsServiceType[]>([])
   const [activeSection, setActiveSection] = useState("company")
+
   const companySave = useSaveFlash()
   const invoiceSave = useSaveFlash()
-  const userSave = useSaveFlash()
-  const contentRef = useRef<HTMLDivElement>(null)
+  const userSave    = useSaveFlash()
+  const logoFileRef = useRef<HTMLInputElement>(null)
+
+  // Load settings from DB on mount (mock mode skips fetch; loading already false)
+  useEffect(() => {
+    if (isMockMode) return
+    fetchSettings()
+      .then((s) => {
+        setCompany(s.company)
+        setLogoPreview(s.company.logoUrl)
+        setInvoice(s.invoice)
+        setUserSettings(s.users)
+        setInitCarriers(s.carriers)
+        setInitServices(s.serviceTypes)
+      })
+      .catch((err) => setLoadError(err instanceof Error ? err.message : "Failed to load settings."))
+      .finally(() => setLoading(false))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   /* ── Admin gate — after all hooks ── */
   if (role !== "admin") {
@@ -432,15 +816,56 @@ export default function SettingsPage() {
     )
   }
 
-  function scrollTo(id: string) {
-    setActiveSection(id)
-    const el = document.getElementById(id)
-    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" })
+  /* ── Logo upload ── */
+  async function handleLogoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+
+    const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/svg+xml"]
+    if (!allowed.includes(file.type)) {
+      setLogoError("Only JPG, PNG, WebP, and SVG files are allowed.")
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setLogoError("Logo must be under 5 MB.")
+      return
+    }
+
+    setLogoPreview(URL.createObjectURL(file))
+    setLogoError(null)
+
+    if (isMockMode) return
+
+    setLogoUploading(true)
+    try {
+      const fd = new FormData()
+      fd.set("file", file)
+      const url = await uploadLogo(fd)
+      setCompany((c) => ({ ...c, logoUrl: url }))
+      setLogoPreview(url)
+    } catch (err) {
+      setLogoError(err instanceof Error ? err.message : "Upload failed.")
+      setLogoPreview(company.logoUrl)
+    } finally {
+      setLogoUploading(false)
+    }
   }
 
-  /* ─────────────────────────────────────────────────────────
-     Render
-  ───────────────────────────────────────────────────────── */
+  function scrollTo(id: string) {
+    setActiveSection(id)
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }
+
+  /* ── Render ── */
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <p className="text-[13px] text-gray-400">Loading settings…</p>
+      </div>
+    )
+  }
+
   return (
     <div className="flex gap-6 h-full min-h-0">
       {/* ── Left nav ── */}
@@ -468,7 +893,14 @@ export default function SettingsPage() {
       </nav>
 
       {/* ── Right content ── */}
-      <div ref={contentRef} className="flex-1 min-w-0 space-y-4 overflow-y-auto pb-6">
+      <div className="flex-1 min-w-0 space-y-4 overflow-y-auto pb-6">
+
+        {loadError && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+            <AlertTriangle className="size-4 text-amber-500 mt-0.5 shrink-0" />
+            <p className="text-[13px] text-amber-700">{loadError}</p>
+          </div>
+        )}
 
         {/* ── 1. Company Info ── */}
         <SectionCard
@@ -478,27 +910,47 @@ export default function SettingsPage() {
           description="Displayed on invoices and client-facing documents"
         >
           <div className="space-y-4">
-            {/* Logo placeholder */}
+            {/* Logo */}
             <Field label="Logo">
               <div className="flex items-center gap-4">
-                <div className="flex size-16 items-center justify-center rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 text-gray-300 shrink-0">
-                  <ImagePlus className="size-6" />
+                <div className="flex size-16 items-center justify-center rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 shrink-0 overflow-hidden">
+                  {logoPreview ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={logoPreview} alt="Company logo" className="size-full object-contain p-1" />
+                  ) : (
+                    <ImagePlus className="size-6 text-gray-300" />
+                  )}
                 </div>
                 <div>
-                  <button className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+                  <button
+                    type="button"
+                    onClick={() => logoFileRef.current?.click()}
+                    disabled={logoUploading}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                  >
                     <Plus className="size-3.5" />
-                    Upload Logo
+                    {logoUploading ? "Uploading…" : "Upload Logo"}
                   </button>
-                  <p className="mt-1 text-[11px] text-gray-400">PNG or SVG, max 1 MB</p>
+                  <p className="mt-1 text-[11px] text-gray-400">JPG, PNG, WebP, or SVG — max 5 MB</p>
+                  {logoError && (
+                    <p className="mt-1 text-[11px] text-red-500">{logoError}</p>
+                  )}
                 </div>
+                <input
+                  ref={logoFileRef}
+                  type="file"
+                  accept="image/jpeg,image/jpg,image/png,image/webp,image/svg+xml"
+                  className="hidden"
+                  onChange={handleLogoChange}
+                />
               </div>
             </Field>
 
             <div className="grid grid-cols-2 gap-4">
               <Field label="Company Name">
                 <input
-                  value={company.name}
-                  onChange={(e) => setCompany((c) => ({ ...c, name: e.target.value }))}
+                  value={company.companyName}
+                  onChange={(e) => setCompany((c) => ({ ...c, companyName: e.target.value }))}
                   className={inputCls}
                 />
               </Field>
@@ -536,8 +988,17 @@ export default function SettingsPage() {
               />
             </Field>
 
+            <InlineError msg={companySave.error} />
             <div className="flex justify-end pt-1">
-              <SaveButton saved={companySave.saved} onClick={companySave.trigger} />
+              <SaveButton
+                saved={companySave.saved}
+                saving={companySave.saving}
+                onClick={() =>
+                  companySave.run(() =>
+                    isMockMode ? Promise.resolve() : saveCompanyInfo(company)
+                  )
+                }
+              />
             </div>
           </div>
         </SectionCard>
@@ -549,7 +1010,7 @@ export default function SettingsPage() {
           title="Carriers"
           description="Available carriers shown in shipment forms"
         >
-          <ManagedList items={carriers} setItems={setCarriers} noun="carrier" />
+          <CarrierList initial={initCarriers} isMockMode={isMockMode} />
         </SectionCard>
 
         {/* ── 3. Service Types ── */}
@@ -557,9 +1018,9 @@ export default function SettingsPage() {
           id="services"
           icon={Wrench}
           title="Service Types"
-          description="Available service options shown in service request forms"
+          description="Available services shown in service request forms"
         >
-          <ManagedList items={serviceTypes} setItems={setServiceTypes} noun="service type" />
+          <ServiceList initial={initServices} isMockMode={isMockMode} />
         </SectionCard>
 
         {/* ── 4. Invoice Settings ── */}
@@ -609,8 +1070,17 @@ export default function SettingsPage() {
               />
             </Field>
 
+            <InlineError msg={invoiceSave.error} />
             <div className="flex justify-end pt-1">
-              <SaveButton saved={invoiceSave.saved} onClick={invoiceSave.trigger} />
+              <SaveButton
+                saved={invoiceSave.saved}
+                saving={invoiceSave.saving}
+                onClick={() =>
+                  invoiceSave.run(() =>
+                    isMockMode ? Promise.resolve() : saveInvoiceSettings(invoice)
+                  )
+                }
+              />
             </div>
           </div>
         </SectionCard>
@@ -623,22 +1093,14 @@ export default function SettingsPage() {
           description="Admin accounts and client portal access defaults"
         >
           <div className="space-y-6">
-
             {/* Admin users */}
             <div>
               <p className="text-[12px] font-semibold text-gray-700 mb-2">Admin Users</p>
               <div className="rounded-lg border border-gray-100 overflow-hidden">
-                {[
-                  { name: "Admin User", email: "admin@safirlogs.com", role: "Super Admin" },
-                ].map((u) => (
-                  <div
-                    key={u.email}
-                    className="flex items-center justify-between px-4 py-3 hover:bg-gray-50 transition-colors"
-                  >
+                {[{ name: "Admin User", email: "admin@safirlogs.com", role: "Super Admin" }].map((u) => (
+                  <div key={u.email} className="flex items-center justify-between px-4 py-3 hover:bg-gray-50">
                     <div className="flex items-center gap-3">
-                      <div className="flex size-8 items-center justify-center rounded-full bg-blue-600 text-white text-[11px] font-bold shrink-0 select-none">
-                        AU
-                      </div>
+                      <div className="flex size-8 items-center justify-center rounded-full bg-blue-600 text-white text-[11px] font-bold shrink-0 select-none">AU</div>
                       <div>
                         <p className="text-[13px] font-medium text-gray-900">{u.name}</p>
                         <p className="text-[11px] text-gray-400">{u.email}</p>
@@ -660,9 +1122,7 @@ export default function SettingsPage() {
                   <Plus className="size-3.5" />
                   Add Admin User
                 </button>
-                <p className="text-[11px] text-gray-400">
-                  Full user management available after Supabase Auth setup.
-                </p>
+                <p className="text-[11px] text-gray-400">Full user management available after Supabase Auth setup.</p>
               </div>
             </div>
 
@@ -677,18 +1137,15 @@ export default function SettingsPage() {
               <div className="space-y-3">
                 <Field label="Invite Email Subject">
                   <input
-                    value={inviteSubject}
-                    onChange={(e) => setInviteSubject(e.target.value)}
+                    value={userSettings.inviteSubject}
+                    onChange={(e) => setUserSettings((v) => ({ ...v, inviteSubject: e.target.value }))}
                     className={inputCls}
                   />
                 </Field>
-                <Field
-                  label="Invite Message Template"
-                  hint="Use [Contact Name] and [Company Name] as placeholders"
-                >
+                <Field label="Invite Message Template" hint="Use [Contact Name] and [Company Name] as placeholders">
                   <textarea
-                    value={inviteMessage}
-                    onChange={(e) => setInviteMessage(e.target.value)}
+                    value={userSettings.inviteMessage}
+                    onChange={(e) => setUserSettings((v) => ({ ...v, inviteMessage: e.target.value }))}
                     rows={5}
                     className={textareaCls}
                   />
@@ -698,15 +1155,13 @@ export default function SettingsPage() {
 
             <div className="h-px bg-gray-100" />
 
-            {/* Password reset */}
+            {/* Info blocks */}
             <div className="flex items-start gap-3 rounded-lg border border-gray-100 bg-gray-50 px-4 py-3.5">
               <KeyRound className="size-4 text-gray-400 mt-0.5 shrink-0" />
               <div>
                 <p className="text-[13px] font-semibold text-gray-700">Password Reset</p>
                 <p className="text-[12px] text-gray-500 mt-0.5 leading-relaxed">
-                  Password resets are sent via email. Admin and client users can request a reset from
-                  the login page at any time. Admins can also trigger a reset from the Clients page
-                  using the key icon on any Active login account.
+                  Password resets are sent via email. Admin and client users can request a reset from the login page at any time. Admins can also trigger a reset from the Clients page using the key icon on any Active login account.
                 </p>
               </div>
             </div>
@@ -716,14 +1171,22 @@ export default function SettingsPage() {
               <div>
                 <p className="text-[13px] font-semibold text-blue-800">Auth Backend</p>
                 <p className="text-[12px] text-blue-600 mt-0.5 leading-relaxed">
-                  Login, session management, and role-based access will be powered by Supabase Auth.
-                  Connect your Supabase project to enable live authentication.
+                  Login, session management, and role-based access will be powered by Supabase Auth. Connect your Supabase project to enable live authentication.
                 </p>
               </div>
             </div>
 
+            <InlineError msg={userSave.error} />
             <div className="flex justify-end">
-              <SaveButton saved={userSave.saved} onClick={userSave.trigger} />
+              <SaveButton
+                saved={userSave.saved}
+                saving={userSave.saving}
+                onClick={() =>
+                  userSave.run(() =>
+                    isMockMode ? Promise.resolve() : saveUserSettings(userSettings)
+                  )
+                }
+              />
             </div>
           </div>
         </SectionCard>
