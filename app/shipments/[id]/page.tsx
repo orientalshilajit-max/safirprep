@@ -117,9 +117,7 @@ export default function EditShipmentPage() {
           prev.map((p) => {
             const sp = shipProducts.find((x) => x.productId === p.id)
             if (!sp) return p
-            const incomingReduction = status === "Received"
-              ? sp.units
-              : sp.receivedUnits + sp.damagedUnits
+            const incomingReduction = sp.units
             return {
               ...p,
               available: p.available + sp.receivedUnits,
@@ -171,9 +169,7 @@ export default function EditShipmentPage() {
             prev.map((p) => {
               const sp = shipProducts.find((x) => x.productId === p.id)
               if (!sp) return p
-              const incomingReduction = status === "Received"
-                ? sp.units                              // full receive: clear all incoming
-                : sp.receivedUnits + sp.damagedUnits    // partial: only subtract processed
+              const incomingReduction = sp.units
               return {
                 ...p,
                 available: p.available + sp.receivedUnits,

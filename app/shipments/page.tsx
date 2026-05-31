@@ -170,9 +170,11 @@ export default function ShipmentsPage() {
     if (!shipment || newStatus === shipment.status) return
 
     if (RECEIVED_STATUSES.includes(newStatus) && !shipment.isInventoryUpdated) {
+      // Inventory not yet posted — open receiving modal to capture quantities
       setReceivingTarget(shipment)
       setReceivingMode(newStatus === "Received" ? "received" : "partially_received")
-    } else if (!RECEIVED_STATUSES.includes(newStatus)) {
+    } else {
+      // Already posted, or a non-receiving status — just update the status field
       handleQuickStatusChange(shipment, newStatus)
     }
   }
@@ -226,7 +228,7 @@ export default function ShipmentsPage() {
         prev.map((p) => {
           const r = results.find((x) => x.productId === p.id)
           if (!r) return p
-          const incomingDelta = newStatus === "Received" ? r.expected : r.received + r.damaged
+          const incomingDelta = r.expected
           return {
             ...p,
             available: p.available + r.received,
@@ -277,7 +279,7 @@ export default function ShipmentsPage() {
           prev.map((p) => {
             const r = results.find((x) => x.productId === p.id)
             if (!r) return p
-            const incomingDelta = newStatus === "Received" ? r.expected : r.received + r.damaged
+            const incomingDelta = r.expected
             return {
               ...p,
               available: p.available + r.received,
@@ -407,11 +409,9 @@ export default function ShipmentsPage() {
       id: "status",
       header: "Status",
       cell: (row) => {
-        // Non-admin or already-posted: static badge
-        if (role !== "admin" || row.isInventoryUpdated) {
-          return <StatusBadge status={row.status} />
-        }
-        // Admin on un-posted shipment: clickable badge with chevron
+        // Client users see a static badge
+        if (role !== "admin") return <StatusBadge status={row.status} />
+        // Admin: always clickable
         return (
           <button
             type="button"
