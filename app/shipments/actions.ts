@@ -36,7 +36,10 @@ function mapRow(row: any): Shipment {
     clientName:     row.clients?.company_name ?? "",
     status:         FROM_DB[row.status] ?? "In Transit",
     notes:          row.notes ?? "",
-    isArchived:     row.archived_at != null,
+    isArchived:  row.archived_at != null,
+    archivedAt:  row.archived_at
+      ? new Date(row.archived_at).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+      : undefined,
     isInventoryUpdated: row.inventory_posted_at != null || Boolean(row.inventory_synced),
     createdAt: new Date(row.created_at).toLocaleDateString("en-US", {
       month: "short", day: "numeric", year: "numeric",
@@ -133,8 +136,21 @@ export async function listShipments(): Promise<Shipment[]> {
   const { data, error } = await supabase
     .from("incoming_shipments")
     .select(SHIPMENT_SELECT)
-    .is("deleted_at", null)
+    .is("deleted_at",   null)
+    .is("archived_at",  null)
     .order("created_at", { ascending: false })
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(mapRow)
+}
+
+export async function listArchivedShipments(): Promise<Shipment[]> {
+  const supabase = await createSupabaseServerClient()
+  const { data, error } = await supabase
+    .from("incoming_shipments")
+    .select(SHIPMENT_SELECT)
+    .is("deleted_at", null)
+    .not("archived_at", "is", null)
+    .order("archived_at", { ascending: false })
   if (error) throw new Error(error.message)
   return (data ?? []).map(mapRow)
 }
@@ -463,8 +479,37 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
 
 export async function archiveShipment(id: string): Promise<void> {
   const supabase = await createSupabaseServerClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error("Unauthorized")
+  const isAdmin = user.app_metadata?.role === "admin"
 
-  // Ownership check: user session is RLS-filtered
+  // Ownership check + status guard for clients
+  const { data: ship, error: gErr } = await supabase
+    .from("incoming_shipments")
+    .select("id, status")
+    .eq("id", id)
+    .maybeSingle()
+  if (gErr) throw new Error(gErr.message)
+  if (!ship) throw new Error("Shipment not found or access denied.")
+
+  if (!isAdmin && RECEIVED_DB.includes(ship.status as string)) {
+    throw new Error("Received shipments can only be archived by an admin.")
+  }
+
+  const admin = createServerAdminClient()
+  const { error } = await admin
+    .from("incoming_shipments")
+    .update({ archived_at: new Date().toISOString() })
+    .eq("id", id)
+  if (error) throw new Error(error.message)
+  revalidatePath("/shipments")
+}
+
+export async function restoreShipment(id: string): Promise<void> {
+  const supabase = await createSupabaseServerClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error("Unauthorized")
+
   const { data: ship, error: gErr } = await supabase
     .from("incoming_shipments")
     .select("id")
@@ -476,9 +521,41 @@ export async function archiveShipment(id: string): Promise<void> {
   const admin = createServerAdminClient()
   const { error } = await admin
     .from("incoming_shipments")
-    .update({ archived_at: new Date().toISOString() })
+    .update({ archived_at: null })
     .eq("id", id)
   if (error) throw new Error(error.message)
+  revalidatePath("/shipments")
+}
+
+type ShipmentDeleteResult = { success: true } | { success: false; error: string }
+
+export async function permanentDeleteShipment(id: string): Promise<ShipmentDeleteResult> {
+  const supabase = await createSupabaseServerClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: "Unauthorized" }
+  if (user.app_metadata?.role !== "admin") {
+    return { success: false, error: "Only admins can permanently delete shipments." }
+  }
+
+  // Ownership / existence check
+  const { data: ship, error: gErr } = await supabase
+    .from("incoming_shipments")
+    .select("id")
+    .eq("id", id)
+    .maybeSingle()
+  if (gErr) return { success: false, error: gErr.message }
+  if (!ship) return { success: false, error: "Shipment not found." }
+
+  // Hard delete — trackings and items cascade; files get shipment_id = null
+  const admin = createServerAdminClient()
+  const { error: delErr } = await admin
+    .from("incoming_shipments")
+    .delete()
+    .eq("id", id)
+  if (delErr) return { success: false, error: delErr.message }
+
+  revalidatePath("/shipments")
+  return { success: true }
 }
 
 // ── softDeleteShipment ────────────────────────────────────────

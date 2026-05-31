@@ -3,9 +3,9 @@
 import { useState, useMemo, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import {
-  Search, SlidersHorizontal, Plus, Pencil, Archive, Trash2,
+  Search, Plus, Pencil, Archive, Trash2,
   Truck, PackageCheck, PackageOpen, AlertTriangle, AlertCircle,
-  ChevronLeft, ChevronRight, ChevronDown,
+  ChevronLeft, ChevronRight, ChevronDown, RotateCcw,
 } from "lucide-react"
 import { useRole, useShipments, useProducts, useIsMockMode } from "@/components/layout/app-shell"
 import { DataTable } from "@/components/ui/data-table"
@@ -14,11 +14,14 @@ import { IconButton } from "@/components/ui/icon-button"
 import { EmptyState } from "@/components/ui/empty-state"
 import { StatCard } from "@/components/ui/stat-card"
 import { ConfirmModal } from "@/components/ui/confirm-modal"
+import { Modal } from "@/components/ui/modal"
 import { ShipmentModal } from "@/components/shipments/shipment-modal"
 import { ReceivingModal, type ReceivingResult } from "@/components/shipments/receiving-modal"
 import {
   archiveShipment,
-  softDeleteShipment,
+  restoreShipment,
+  permanentDeleteShipment,
+  listArchivedShipments,
   updateShipment,
 } from "@/app/shipments/actions"
 import { listProductClients } from "@/app/products/actions"
@@ -47,8 +50,25 @@ export default function ShipmentsPage() {
   const [statusFilter, setStatusFilter] = useState<ShipmentStatus | "all">("all")
   const [page,         setPage]         = useState(1)
   const [createOpen,   setCreateOpen]   = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState<Shipment | null>(null)
   const [actionError,  setActionError]  = useState<string | null>(null)
+
+  // Active / Archived tabs
+  const [activeTab, setActiveTab] = useState<"active" | "archived">("active")
+  const [archivedShipments, setArchivedShipments] = useState<Shipment[]>([])
+  const [archivedLoading,   setArchivedLoading]   = useState(false)
+  const [archivedPage,      setArchivedPage]       = useState(1)
+
+  // Archive confirmation modal
+  const [archiveTarget, setArchiveTarget] = useState<Shipment | null>(null)
+  const [archiving,     setArchiving]     = useState(false)
+
+  // Restore confirmation modal
+  const [restoreTarget, setRestoreTarget] = useState<Shipment | null>(null)
+  const [restoring,     setRestoring]     = useState(false)
+
+  // Permanent delete modal
+  const [permDeleteTarget, setPermDeleteTarget] = useState<Shipment | null>(null)
+  const [permDeleting,     setPermDeleting]     = useState(false)
 
   // Status dropdown (fixed-position, one open at a time)
   const [statusDropdown, setStatusDropdown] = useState<{
@@ -82,6 +102,15 @@ export default function ShipmentsPage() {
     }
   }, [isMockMode, role])
 
+  function loadArchivedShipments() {
+    if (isMockMode) return
+    setArchivedLoading(true)
+    listArchivedShipments()
+      .then(setArchivedShipments)
+      .catch(() => flashError("Failed to load archived shipments."))
+      .finally(() => setArchivedLoading(false))
+  }
+
   /* ── Stat card counts ────────────────────────────────── */
   const active = shipments.filter((s) => !s.isArchived)
   const counts = {
@@ -91,7 +120,7 @@ export default function ShipmentsPage() {
     "Need Attention": active.filter((s) => s.status === "Need Attention").length,
   }
 
-  /* ── Filtered + paginated ────────────────────────────── */
+  /* ── Filtered + paginated (Active tab) ───────────────── */
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
     return active.filter((s) => {
@@ -112,6 +141,21 @@ export default function ShipmentsPage() {
   const safePage   = Math.min(page, totalPages)
   const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
+  /* ── Filtered + paginated (Archived tab) ─────────────── */
+  const filteredArchived = useMemo(() => {
+    const q = search.toLowerCase().trim()
+    if (!q) return archivedShipments
+    return archivedShipments.filter((s) =>
+      s.shipmentNumber.toLowerCase().includes(q) ||
+      s.clientName.toLowerCase().includes(q) ||
+      s.tracking.some((t) => t.trackingNumber.toLowerCase().includes(q))
+    )
+  }, [archivedShipments, search])
+
+  const totalArchivedPages = Math.max(1, Math.ceil(filteredArchived.length / PAGE_SIZE))
+  const safeArchivedPage   = Math.min(archivedPage, totalArchivedPages)
+  const paginatedArchived  = filteredArchived.slice((safeArchivedPage - 1) * PAGE_SIZE, safeArchivedPage * PAGE_SIZE)
+
   /* ── Shipment list actions ───────────────────────────── */
   function handleCreate(shipment: Shipment) {
     setShipments((prev) => [shipment, ...prev])
@@ -124,38 +168,71 @@ export default function ShipmentsPage() {
     setCreateOpen(false)
   }
 
-  async function handleArchive(id: string) {
+  async function handleArchiveConfirm() {
+    if (!archiveTarget) return
+    const id = archiveTarget.id
     if (isMockMode) {
-      setShipments((prev) => prev.map((s) => (s.id === id ? { ...s, isArchived: true } : s)))
+      setShipments((prev) => prev.filter((s) => s.id !== id))
+      setArchiveTarget(null)
       return
     }
+    setArchiving(true)
     try {
       await archiveShipment(id)
-      setShipments((prev) => prev.map((s) => (s.id === id ? { ...s, isArchived: true } : s)))
+      setShipments((prev) => prev.filter((s) => s.id !== id))
+      setArchiveTarget(null)
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to archive shipment.")
+    } finally {
+      setArchiving(false)
     }
   }
 
-  async function handleDelete(id: string) {
+  async function handleRestoreConfirm() {
+    if (!restoreTarget) return
+    const id = restoreTarget.id
     if (isMockMode) {
-      setShipments((prev) => prev.filter((s) => s.id !== id))
+      setArchivedShipments((prev) => prev.filter((s) => s.id !== id))
+      setRestoreTarget(null)
       return
     }
+    setRestoring(true)
     try {
-      await softDeleteShipment(id)
-      setShipments((prev) => prev.filter((s) => s.id !== id))
-      const deleted = shipments.find((s) => s.id === id)
-      if (deleted && !deleted.isInventoryUpdated) {
-        setProducts((prev) =>
-          prev.map((p) => {
-            const sp = deleted.products.find((x) => x.productId === p.id)
-            return sp ? { ...p, incoming: Math.max(0, p.incoming - sp.units) } : p
-          })
-        )
+      await restoreShipment(id)
+      const restored = archivedShipments.find((s) => s.id === id)
+      if (restored) {
+        setArchivedShipments((prev) => prev.filter((s) => s.id !== id))
+        setShipments((prev) => [{ ...restored, isArchived: false, archivedAt: undefined }, ...prev])
       }
+      setRestoreTarget(null)
     } catch (err) {
-      flashError(err instanceof Error ? err.message : "Failed to delete shipment.")
+      flashError(err instanceof Error ? err.message : "Failed to restore shipment.")
+    } finally {
+      setRestoring(false)
+    }
+  }
+
+  async function handlePermDeleteConfirm() {
+    if (!permDeleteTarget) return
+    const id = permDeleteTarget.id
+    if (isMockMode) {
+      setArchivedShipments((prev) => prev.filter((s) => s.id !== id))
+      setPermDeleteTarget(null)
+      return
+    }
+    setPermDeleting(true)
+    try {
+      const result = await permanentDeleteShipment(id)
+      if (!result.success) {
+        flashError(result.error)
+        return
+      }
+      setArchivedShipments((prev) => prev.filter((s) => s.id !== id))
+      setPermDeleteTarget(null)
+    } catch (err) {
+      flashError(err instanceof Error ? err.message : "Failed to delete shipment permanently.")
+    } finally {
+      setPermDeleting(false)
     }
   }
 
@@ -176,7 +253,6 @@ export default function ShipmentsPage() {
     if (!shipment || newStatus === shipment.status) return
 
     if (RECEIVED_STATUSES.includes(newStatus) && !shipment.isInventoryUpdated) {
-      // Not yet posted — open receiving modal to capture quantities
       setReceivingTarget(shipment)
       setReceivingMode(newStatus === "Received" ? "received" : "partially_received")
     } else if (
@@ -184,10 +260,8 @@ export default function ShipmentsPage() {
       !RECEIVED_STATUSES.includes(newStatus) &&
       shipment.isInventoryUpdated
     ) {
-      // Rolling back a posted shipment — warn first
       setWarnTarget({ shipment, newStatus })
     } else {
-      // Any other change — update immediately
       handleQuickStatusChange(shipment, newStatus)
     }
   }
@@ -224,10 +298,8 @@ export default function ShipmentsPage() {
   /* ── Receiving modal confirm ─────────────────────────── */
   async function handleReceivingConfirm(results: ReceivingResult[], finalStatus: ShipmentStatus) {
     if (!receivingTarget) return
-    const newStatus = finalStatus  // determined by the modal (includes in-transit choice)
+    const newStatus = finalStatus
 
-    // incomingDelta: how much to subtract from incoming_units in the optimistic update.
-    // Received → clear all (remaining = missing); Partially Received → keep in-transit portion.
     function incomingDelta(r: ReceivingResult) {
       return newStatus === "Received" ? r.expected : r.received + r.damaged
     }
@@ -285,14 +357,10 @@ export default function ShipmentsPage() {
 
       setShipments((prev) => prev.map((s) => (s.id === receivingTarget.id ? updated : s)))
 
-      // Re-fetch products so Available/Incoming/Damaged columns update immediately.
-      // router.refresh() also clears the Next.js router cache so navigating to
-      // /products shows the fresh data (paired with revalidatePath on the server).
       try {
         const fresh = await listProducts()
         setProducts(fresh)
       } catch {
-        // Fallback: optimistic update
         setProducts((prev) =>
           prev.map((p) => {
             const r = results.find((x) => x.productId === p.id)
@@ -326,15 +394,12 @@ export default function ShipmentsPage() {
   function totalReceived(s: Shipment) { return s.products.reduce((n, p) => n + p.receivedUnits, 0) }
   function totalDamaged(s: Shipment)  { return s.products.reduce((n, p) => n + p.damagedUnits,  0) }
 
-  // "In Transit" = remaining units that are still expected to arrive.
-  // Only meaningful for In Transit, Arrived, and Partially Received shipments.
   const IN_TRANSIT_STATUSES: ShipmentStatus[] = ["In Transit", "Arrived", "Partially Received"]
   function totalInTransit(s: Shipment) {
     if (!IN_TRANSIT_STATUSES.includes(s.status)) return 0
     return Math.max(0, totalExpected(s) - totalReceived(s) - totalDamaged(s))
   }
 
-  // "Missing" = units confirmed not arriving (remaining on Received / Need Attention).
   function totalMissing(s: Shipment) {
     if (IN_TRANSIT_STATUSES.includes(s.status)) return 0
     return Math.max(0, totalExpected(s) - totalReceived(s) - totalDamaged(s))
@@ -347,8 +412,8 @@ export default function ShipmentsPage() {
     return extra > 0 ? `${first.trackingNumber} +${extra}` : first.trackingNumber
   }
 
-  /* ── Columns ─────────────────────────────────────────── */
-  const baseColumns: DataTableColumn<Shipment>[] = [
+  /* ── Active tab columns ──────────────────────────────── */
+  const activeBaseColumns: DataTableColumn<Shipment>[] = [
     {
       id: "number",
       header: "Shipment #",
@@ -451,9 +516,7 @@ export default function ShipmentsPage() {
       id: "status",
       header: "Status",
       cell: (row) => {
-        // Client users see a static badge
         if (role !== "admin") return <StatusBadge status={row.status} />
-        // Admin: always clickable
         return (
           <button
             type="button"
@@ -481,6 +544,7 @@ export default function ShipmentsPage() {
       className: "text-right w-20",
       cell: (row) => {
         const isReceived = RECEIVED_STATUSES.includes(row.status)
+        const canArchive = role === "admin" || !isReceived
         return (
           <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
             <IconButton
@@ -490,21 +554,13 @@ export default function ShipmentsPage() {
             >
               <Pencil className="size-3.5" />
             </IconButton>
-            {isReceived ? (
+            {canArchive && (
               <IconButton
                 variant="default"
-                onClick={() => handleArchive(row.id)}
+                onClick={() => setArchiveTarget(row)}
                 title="Archive"
               >
                 <Archive className="size-3.5" />
-              </IconButton>
-            ) : (
-              <IconButton
-                variant="danger"
-                onClick={() => setDeleteTarget(row)}
-                title="Delete"
-              >
-                <Trash2 className="size-3.5" />
               </IconButton>
             )}
           </div>
@@ -513,7 +569,7 @@ export default function ShipmentsPage() {
     },
   ]
 
-  const adminClientCol: DataTableColumn<Shipment> = {
+  const activeAdminClientCol: DataTableColumn<Shipment> = {
     id: "client",
     header: "Client",
     cell: (row) => (
@@ -521,10 +577,186 @@ export default function ShipmentsPage() {
     ),
   }
 
-  const columns =
+  const activeColumns =
     role === "admin"
-      ? [baseColumns[0], adminClientCol, ...baseColumns.slice(1)]
-      : baseColumns
+      ? [activeBaseColumns[0], activeAdminClientCol, ...activeBaseColumns.slice(1)]
+      : activeBaseColumns
+
+  /* ── Archived tab columns ────────────────────────────── */
+  const archivedBaseColumns: DataTableColumn<Shipment>[] = [
+    {
+      id: "number",
+      header: "Shipment #",
+      cell: (row) => (
+        <span className="font-mono text-[12px] font-semibold text-gray-700">
+          {row.shipmentNumber}
+        </span>
+      ),
+    },
+    {
+      id: "products",
+      header: "Products",
+      headerClassName: "text-right",
+      className: "text-right",
+      cell: (row) => (
+        <span className="text-[13px] text-gray-700 tabular-nums">{row.products.length}</span>
+      ),
+    },
+    {
+      id: "expected",
+      header: "Expected",
+      headerClassName: "text-right",
+      className: "text-right",
+      cell: (row) => (
+        <span className="text-[13px] font-semibold text-gray-800 tabular-nums">
+          {totalExpected(row).toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      id: "received",
+      header: "Received",
+      headerClassName: "text-right",
+      className: "text-right",
+      cell: (row) => (
+        <span className="text-[13px] tabular-nums text-gray-700">
+          {totalReceived(row).toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      id: "damaged",
+      header: "Damaged",
+      headerClassName: "text-right",
+      className: "text-right",
+      cell: (row) => {
+        const n = totalDamaged(row)
+        return (
+          <span className={`text-[13px] tabular-nums ${n > 0 ? "text-amber-600 font-semibold" : "text-gray-400"}`}>
+            {n.toLocaleString()}
+          </span>
+        )
+      },
+    },
+    {
+      id: "status",
+      header: "Status",
+      cell: (row) => <StatusBadge status={row.status} />,
+    },
+    {
+      id: "archived",
+      header: "Archived",
+      cell: (row) => (
+        <span className="text-[12px] text-gray-500">{row.archivedAt ?? "—"}</span>
+      ),
+    },
+    {
+      id: "actions",
+      header: "Actions",
+      headerClassName: "text-right w-20",
+      className: "text-right w-20",
+      cell: (row) => (
+        <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <IconButton
+            variant="primary"
+            onClick={() => setRestoreTarget(row)}
+            title="Restore"
+          >
+            <RotateCcw className="size-3.5" />
+          </IconButton>
+          {role === "admin" && (
+            <IconButton
+              variant="danger"
+              onClick={() => setPermDeleteTarget(row)}
+              title="Delete Permanently"
+            >
+              <Trash2 className="size-3.5" />
+            </IconButton>
+          )}
+        </div>
+      ),
+    },
+  ]
+
+  const archivedAdminClientCol: DataTableColumn<Shipment> = {
+    id: "client",
+    header: "Client",
+    cell: (row) => (
+      <span className="text-[12px] text-gray-500">{row.clientName}</span>
+    ),
+  }
+
+  const archivedColumns =
+    role === "admin"
+      ? [archivedBaseColumns[0], archivedAdminClientCol, ...archivedBaseColumns.slice(1)]
+      : archivedBaseColumns
+
+  /* ── Pagination helper ───────────────────────────────── */
+  function renderPagination(
+    current: number,
+    total: number,
+    count: number,
+    onPage: (n: number) => void
+  ) {
+    const safe = Math.min(current, total)
+    return (
+      <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 bg-gray-50/50 shrink-0">
+        <p className="text-[12px] text-gray-500">
+          Showing{" "}
+          <span className="font-medium text-gray-700">
+            {count === 0 ? 0 : (safe - 1) * PAGE_SIZE + 1}
+          </span>{" "}
+          to{" "}
+          <span className="font-medium text-gray-700">
+            {Math.min(safe * PAGE_SIZE, count)}
+          </span>{" "}
+          of{" "}
+          <span className="font-medium text-gray-700">{count}</span>{" "}
+          shipments
+        </p>
+        <div className="flex items-center gap-1">
+          <button
+            onClick={() => onPage(Math.max(1, current - 1))}
+            disabled={safe === 1}
+            className="flex size-7 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <ChevronLeft className="size-3.5" />
+          </button>
+          {Array.from({ length: total }, (_, i) => i + 1)
+            .filter((n) => n === 1 || n === total || Math.abs(n - safe) <= 1)
+            .reduce<(number | "…")[]>((acc, n, i, arr) => {
+              if (i > 0 && (arr[i - 1] as number) !== n - 1) acc.push("…")
+              acc.push(n)
+              return acc
+            }, [])
+            .map((n, i) =>
+              n === "…" ? (
+                <span key={`e${i}`} className="px-1 text-[12px] text-gray-400">…</span>
+              ) : (
+                <button
+                  key={n}
+                  onClick={() => onPage(n as number)}
+                  className={`flex size-7 items-center justify-center rounded-md text-[12px] font-medium transition-colors ${
+                    safe === n
+                      ? "bg-blue-600 text-white"
+                      : "border border-gray-200 text-gray-600 hover:bg-gray-100"
+                  }`}
+                >
+                  {n}
+                </button>
+              )
+            )}
+          <button
+            onClick={() => onPage(Math.min(total, current + 1))}
+            disabled={safe === total}
+            className="flex size-7 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <ChevronRight className="size-3.5" />
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   /* ── Render ──────────────────────────────────────────── */
   return (
@@ -554,162 +786,167 @@ export default function ShipmentsPage() {
         </div>
       )}
 
-      {/* Stat cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard
-          label="In Transit"
-          value={counts["In Transit"]}
-          icon={Truck}
-          iconClass="bg-blue-50 text-blue-600"
-          active={statusFilter === "In Transit"}
-          onClick={() => handleStatClick("In Transit")}
-        />
-        <StatCard
-          label="Arrived"
-          value={counts.Arrived}
-          icon={PackageOpen}
-          iconClass="bg-violet-50 text-violet-600"
-          active={statusFilter === "Arrived"}
-          onClick={() => handleStatClick("Arrived")}
-        />
-        <StatCard
-          label="Received"
-          value={counts.Received}
-          icon={PackageCheck}
-          iconClass="bg-green-50 text-green-600"
-          active={statusFilter === "Received"}
-          onClick={() => handleStatClick("Received")}
-        />
-        <StatCard
-          label="Need Attention"
-          value={counts["Need Attention"]}
-          icon={AlertTriangle}
-          iconClass="bg-red-50 text-red-500"
-          active={statusFilter === "Need Attention"}
-          onClick={() => handleStatClick("Need Attention")}
-        />
-      </div>
+      {/* Stat cards — active tab only */}
+      {activeTab === "active" && (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <StatCard
+            label="In Transit"
+            value={counts["In Transit"]}
+            icon={Truck}
+            iconClass="bg-blue-50 text-blue-600"
+            active={statusFilter === "In Transit"}
+            onClick={() => handleStatClick("In Transit")}
+          />
+          <StatCard
+            label="Arrived"
+            value={counts.Arrived}
+            icon={PackageOpen}
+            iconClass="bg-violet-50 text-violet-600"
+            active={statusFilter === "Arrived"}
+            onClick={() => handleStatClick("Arrived")}
+          />
+          <StatCard
+            label="Received"
+            value={counts.Received}
+            icon={PackageCheck}
+            iconClass="bg-green-50 text-green-600"
+            active={statusFilter === "Received"}
+            onClick={() => handleStatClick("Received")}
+          />
+          <StatCard
+            label="Need Attention"
+            value={counts["Need Attention"]}
+            icon={AlertTriangle}
+            iconClass="bg-red-50 text-red-500"
+            active={statusFilter === "Need Attention"}
+            onClick={() => handleStatClick("Need Attention")}
+          />
+        </div>
+      )}
 
       {/* Table card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden flex-1 min-h-0">
         {/* Toolbar */}
         <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-200">
+          {/* Tabs */}
+          <div className="flex items-center gap-0 mr-2 rounded-lg border border-gray-200 bg-gray-50 p-0.5 shrink-0">
+            <button
+              onClick={() => { setActiveTab("active"); setSearch(""); setPage(1) }}
+              className={`px-3 py-1 text-[12px] font-medium rounded-md transition-colors ${
+                activeTab === "active"
+                  ? "bg-white text-gray-900 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              Active
+            </button>
+            <button
+              onClick={() => { setActiveTab("archived"); setSearch(""); setArchivedPage(1); loadArchivedShipments() }}
+              className={`px-3 py-1 text-[12px] font-medium rounded-md transition-colors ${
+                activeTab === "archived"
+                  ? "bg-white text-gray-900 shadow-sm"
+                  : "text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              Archived
+            </button>
+          </div>
+
           <div className="relative flex-1 max-w-sm">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-gray-400 pointer-events-none" />
             <input
               type="text"
               value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1) }}
+              onChange={(e) => {
+                setSearch(e.target.value)
+                if (activeTab === "active") setPage(1)
+                else setArchivedPage(1)
+              }}
               placeholder="Search by shipment, tracking or client"
               className="w-full pl-8 pr-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 bg-gray-50"
             />
           </div>
 
-          <select
-            value={statusFilter}
-            onChange={(e) => { setStatusFilter(e.target.value as typeof statusFilter); setPage(1) }}
-            className="px-3 py-2 text-[13px] border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-600"
-          >
-            <option value="all">All Statuses</option>
-            <option value="In Transit">In Transit</option>
-            <option value="Arrived">Arrived</option>
-            <option value="Received">Received</option>
-            <option value="Partially Received">Partially Received</option>
-            <option value="Need Attention">Need Attention</option>
-          </select>
-
-          <button className="flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-            <SlidersHorizontal className="size-3.5" />
-            Filters
-          </button>
+          {activeTab === "active" && (
+            <select
+              value={statusFilter}
+              onChange={(e) => { setStatusFilter(e.target.value as typeof statusFilter); setPage(1) }}
+              className="px-3 py-2 text-[13px] border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-600"
+            >
+              <option value="all">All Statuses</option>
+              <option value="In Transit">In Transit</option>
+              <option value="Arrived">Arrived</option>
+              <option value="Received">Received</option>
+              <option value="Partially Received">Partially Received</option>
+              <option value="Need Attention">Need Attention</option>
+            </select>
+          )}
         </div>
 
-        {/* Table */}
-        <div className="flex-1 overflow-y-auto">
-          <DataTable
-            columns={columns}
-            data={paginated}
-            keyExtractor={(s) => s.id}
-            emptyState={
-              <EmptyState
-                title="No shipments found"
-                description={
-                  search || statusFilter !== "all"
-                    ? "Try adjusting your search or filter."
-                    : "Create your first shipment to get started."
-                }
-                action={
-                  !search && statusFilter === "all" && (
-                    <button
-                      onClick={() => setCreateOpen(true)}
-                      className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-[13px] font-semibold rounded-lg hover:bg-blue-700 transition-colors"
-                    >
-                      <Plus className="size-4" />
-                      Create Shipment
-                    </button>
-                  )
+        {/* Active table */}
+        {activeTab === "active" && (
+          <>
+            <div className="flex-1 overflow-y-auto">
+              <DataTable
+                columns={activeColumns}
+                data={paginated}
+                keyExtractor={(s) => s.id}
+                emptyState={
+                  <EmptyState
+                    title="No shipments found"
+                    description={
+                      search || statusFilter !== "all"
+                        ? "Try adjusting your search or filter."
+                        : "Create your first shipment to get started."
+                    }
+                    action={
+                      !search && statusFilter === "all" && (
+                        <button
+                          onClick={() => setCreateOpen(true)}
+                          className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-[13px] font-semibold rounded-lg hover:bg-blue-700 transition-colors"
+                        >
+                          <Plus className="size-4" />
+                          Create Shipment
+                        </button>
+                      )
+                    }
+                  />
                 }
               />
-            }
-          />
-        </div>
+            </div>
+            {renderPagination(safePage, totalPages, filtered.length, setPage)}
+          </>
+        )}
 
-        {/* Pagination */}
-        <div className="flex items-center justify-between px-4 py-3 border-t border-gray-200 bg-gray-50/50 shrink-0">
-          <p className="text-[12px] text-gray-500">
-            Showing{" "}
-            <span className="font-medium text-gray-700">
-              {filtered.length === 0 ? 0 : (safePage - 1) * PAGE_SIZE + 1}
-            </span>{" "}
-            to{" "}
-            <span className="font-medium text-gray-700">
-              {Math.min(safePage * PAGE_SIZE, filtered.length)}
-            </span>{" "}
-            of{" "}
-            <span className="font-medium text-gray-700">{filtered.length}</span>{" "}
-            shipments
-          </p>
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              disabled={safePage === 1}
-              className="flex size-7 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              <ChevronLeft className="size-3.5" />
-            </button>
-            {Array.from({ length: totalPages }, (_, i) => i + 1)
-              .filter((n) => n === 1 || n === totalPages || Math.abs(n - safePage) <= 1)
-              .reduce<(number | "…")[]>((acc, n, i, arr) => {
-                if (i > 0 && (arr[i - 1] as number) !== n - 1) acc.push("…")
-                acc.push(n)
-                return acc
-              }, [])
-              .map((n, i) =>
-                n === "…" ? (
-                  <span key={`e${i}`} className="px-1 text-[12px] text-gray-400">…</span>
-                ) : (
-                  <button
-                    key={n}
-                    onClick={() => setPage(n as number)}
-                    className={`flex size-7 items-center justify-center rounded-md text-[12px] font-medium transition-colors ${
-                      safePage === n
-                        ? "bg-blue-600 text-white"
-                        : "border border-gray-200 text-gray-600 hover:bg-gray-100"
-                    }`}
-                  >
-                    {n}
-                  </button>
-                )
+        {/* Archived table */}
+        {activeTab === "archived" && (
+          <>
+            <div className="flex-1 overflow-y-auto">
+              {archivedLoading ? (
+                <div className="flex items-center justify-center h-40">
+                  <p className="text-[13px] text-gray-400">Loading archived shipments…</p>
+                </div>
+              ) : (
+                <DataTable
+                  columns={archivedColumns}
+                  data={paginatedArchived}
+                  keyExtractor={(s) => s.id}
+                  emptyState={
+                    <EmptyState
+                      title="No archived shipments"
+                      description={
+                        search
+                          ? "Try adjusting your search."
+                          : "Archived shipments will appear here."
+                      }
+                    />
+                  }
+                />
               )}
-            <button
-              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-              disabled={safePage === totalPages}
-              className="flex size-7 items-center justify-center rounded-md border border-gray-200 text-gray-500 hover:bg-gray-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              <ChevronRight className="size-3.5" />
-            </button>
-          </div>
-        </div>
+            </div>
+            {!archivedLoading && renderPagination(safeArchivedPage, totalArchivedPages, filteredArchived.length, setArchivedPage)}
+          </>
+        )}
       </div>
 
       {/* Create modal */}
@@ -733,18 +970,106 @@ export default function ShipmentsPage() {
         variant="primary"
       />
 
-      {/* Delete confirmation */}
+      {/* Archive confirmation */}
+      <Modal
+        isOpen={!!archiveTarget}
+        onClose={() => !archiving && setArchiveTarget(null)}
+        title="Archive shipment?"
+        size="sm"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setArchiveTarget(null)}
+              disabled={archiving}
+              className="px-4 py-2 text-[13px] font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleArchiveConfirm}
+              disabled={archiving}
+              className="px-4 py-2 text-[13px] font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50"
+            >
+              {archiving ? "Archiving…" : "Archive Shipment"}
+            </button>
+          </div>
+        }
+      >
+        <div className="flex gap-4">
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-gray-100">
+            <Archive className="size-5 text-gray-600" />
+          </div>
+          <p className="text-[13px] text-gray-600 leading-relaxed">
+            This shipment will be moved to Archive. You can restore it later if needed.
+          </p>
+        </div>
+      </Modal>
+
+      {/* Restore confirmation */}
       <ConfirmModal
-        isOpen={!!deleteTarget}
-        onClose={() => setDeleteTarget(null)}
-        onConfirm={() => { if (deleteTarget) handleDelete(deleteTarget.id) }}
-        title="Delete Shipment"
-        message={`This shipment (${deleteTarget?.shipmentNumber}) will be permanently deleted. This action cannot be undone.`}
-        confirmLabel="Delete"
-        variant="danger"
+        isOpen={!!restoreTarget}
+        onClose={() => !restoring && setRestoreTarget(null)}
+        onConfirm={handleRestoreConfirm}
+        title="Restore shipment?"
+        message={`Shipment ${restoreTarget?.shipmentNumber ?? ""} will be moved back to the Active list.`}
+        confirmLabel={restoring ? "Restoring…" : "Restore"}
+        variant="primary"
       />
 
-      {/* Receiving modal (portal — rendered outside table overflow) */}
+      {/* Permanent delete modal */}
+      <Modal
+        isOpen={!!permDeleteTarget}
+        onClose={() => !permDeleting && setPermDeleteTarget(null)}
+        title="Delete shipment permanently?"
+        size="sm"
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setPermDeleteTarget(null)}
+              disabled={permDeleting}
+              className="px-4 py-2 text-[13px] font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handlePermDeleteConfirm}
+              disabled={permDeleting}
+              className="px-4 py-2 text-[13px] font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50"
+            >
+              {permDeleting ? "Deleting…" : "Delete Permanently"}
+            </button>
+          </div>
+        }
+      >
+        <div className="flex flex-col gap-3">
+          <div className="flex gap-4">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-red-50">
+              <AlertTriangle className="size-5 text-red-600" />
+            </div>
+            <p className="text-[13px] text-gray-600 leading-relaxed">
+              This will permanently delete the shipment and its shipment records. This action cannot be undone.
+            </p>
+          </div>
+          {permDeleteTarget?.isInventoryUpdated && (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+              <p className="text-[12px] text-amber-700 font-medium leading-relaxed">
+                This shipment has already affected stock. Deleting it will not automatically reverse inventory. Manual stock adjustment may be required.
+              </p>
+            </div>
+          )}
+          <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5">
+            <p className="text-[12px] text-gray-500 leading-relaxed">
+              This shipment may have related files or documents. They may also be removed or disconnected.
+            </p>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Receiving modal */}
       {receivingTarget && (
         <ReceivingModal
           isOpen={!!receivingTarget}
@@ -760,7 +1085,6 @@ export default function ShipmentsPage() {
       {/* Status dropdown — fixed positioned to avoid table overflow clipping */}
       {statusDropdown && (
         <>
-          {/* Invisible backdrop to dismiss on click-outside */}
           <div
             className="fixed inset-0 z-30"
             onClick={() => setStatusDropdown(null)}

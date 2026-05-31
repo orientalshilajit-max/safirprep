@@ -115,6 +115,7 @@ export type Shipment = {
   createdAt: string
   notes: string
   isArchived?: boolean
+  archivedAt?: string
   isInventoryUpdated?: boolean
 }
 
