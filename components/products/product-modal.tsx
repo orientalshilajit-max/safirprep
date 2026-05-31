@@ -136,7 +136,7 @@ export function ProductModal({
 
   async function handleSubmit(e: { preventDefault(): void }) {
     e.preventDefault()
-    if (!form.name.trim() || !form.sku.trim()) return
+    if (!form.name.trim()) return
     setSaving(true)
     setSaveError(null)
     try {
