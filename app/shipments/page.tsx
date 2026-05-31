@@ -303,8 +303,11 @@ export default function ShipmentsPage() {
   }
 
   /* ── Totals / helpers ────────────────────────────────── */
-  function totalUnits(s: Shipment) {
-    return s.products.reduce((sum, p) => sum + p.units, 0)
+  function totalExpected(s: Shipment)  { return s.products.reduce((n, p) => n + p.units,         0) }
+  function totalReceived(s: Shipment)  { return s.products.reduce((n, p) => n + p.receivedUnits,  0) }
+  function totalDamaged(s: Shipment)   { return s.products.reduce((n, p) => n + p.damagedUnits,   0) }
+  function totalMissing(s: Shipment)   {
+    return Math.max(0, totalExpected(s) - totalReceived(s) - totalDamaged(s))
   }
 
   function primaryTracking(s: Shipment) {
@@ -335,15 +338,54 @@ export default function ShipmentsPage() {
       ),
     },
     {
-      id: "units",
-      header: "Units",
+      id: "expected",
+      header: "Expected",
       headerClassName: "text-right",
       className: "text-right",
       cell: (row) => (
         <span className="text-[13px] font-semibold text-gray-800 tabular-nums">
-          {totalUnits(row).toLocaleString()}
+          {totalExpected(row).toLocaleString()}
         </span>
       ),
+    },
+    {
+      id: "received",
+      header: "Received",
+      headerClassName: "text-right",
+      className: "text-right",
+      cell: (row) => (
+        <span className="text-[13px] tabular-nums text-gray-700">
+          {totalReceived(row).toLocaleString()}
+        </span>
+      ),
+    },
+    {
+      id: "damaged",
+      header: "Damaged",
+      headerClassName: "text-right",
+      className: "text-right",
+      cell: (row) => {
+        const n = totalDamaged(row)
+        return (
+          <span className={`text-[13px] tabular-nums ${n > 0 ? "text-amber-600 font-semibold" : "text-gray-400"}`}>
+            {n.toLocaleString()}
+          </span>
+        )
+      },
+    },
+    {
+      id: "missing",
+      header: "Missing",
+      headerClassName: "text-right",
+      className: "text-right",
+      cell: (row) => {
+        const n = totalMissing(row)
+        return (
+          <span className={`text-[13px] tabular-nums ${n > 0 ? "text-red-600 font-bold" : "text-gray-400"}`}>
+            {n.toLocaleString()}
+          </span>
+        )
+      },
     },
     {
       id: "tracking",
