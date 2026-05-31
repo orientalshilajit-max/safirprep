@@ -450,7 +450,7 @@ function AdminDashboard() {
       {/* Stat cards */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
         <StatCard
-          label="Active Clients"
+          label="Active Clients test"
           value={activeClients}
           icon={Users}
           iconClass="bg-blue-50 text-blue-600"
