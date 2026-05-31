@@ -57,6 +57,12 @@ export default function ShipmentsPage() {
     left: number
   } | null>(null)
 
+  // Warning modal for rolling back an already-posted shipment
+  const [warnTarget, setWarnTarget] = useState<{
+    shipment: Shipment
+    newStatus: ShipmentStatus
+  } | null>(null)
+
   // Receiving modal
   const [receivingTarget, setReceivingTarget] = useState<Shipment | null>(null)
   const [receivingMode,   setReceivingMode]   = useState<"received" | "partially_received">("received")
@@ -170,11 +176,18 @@ export default function ShipmentsPage() {
     if (!shipment || newStatus === shipment.status) return
 
     if (RECEIVED_STATUSES.includes(newStatus) && !shipment.isInventoryUpdated) {
-      // Inventory not yet posted — open receiving modal to capture quantities
+      // Not yet posted — open receiving modal to capture quantities
       setReceivingTarget(shipment)
       setReceivingMode(newStatus === "Received" ? "received" : "partially_received")
+    } else if (
+      RECEIVED_STATUSES.includes(shipment.status) &&
+      !RECEIVED_STATUSES.includes(newStatus) &&
+      shipment.isInventoryUpdated
+    ) {
+      // Rolling back a posted shipment — warn first
+      setWarnTarget({ shipment, newStatus })
     } else {
-      // Already posted, or a non-receiving status — just update the status field
+      // Any other change — update immediately
       handleQuickStatusChange(shipment, newStatus)
     }
   }
@@ -676,6 +689,19 @@ export default function ShipmentsPage() {
         onClose={() => setCreateOpen(false)}
         onSave={handleCreate}
         clients={!isMockMode ? pageClients : undefined}
+      />
+
+      {/* Inventory-already-posted warning */}
+      <ConfirmModal
+        isOpen={!!warnTarget}
+        onClose={() => setWarnTarget(null)}
+        onConfirm={() => {
+          if (warnTarget) handleQuickStatusChange(warnTarget.shipment, warnTarget.newStatus)
+        }}
+        title="Inventory already posted"
+        message="This shipment has already been added to stock. Changing the status will not automatically adjust inventory. Please make a manual inventory adjustment if needed."
+        confirmLabel="Change Status Anyway"
+        variant="primary"
       />
 
       {/* Delete confirmation */}

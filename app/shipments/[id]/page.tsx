@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation"
 import { ArrowLeft, Plus, X, Save, Paperclip, FileText, File, Archive, AlertCircle } from "lucide-react"
 import { useRole, useProducts, useShipments, useFiles, useIsMockMode, useAuthUser } from "@/components/layout/app-shell"
 import { StatusBadge } from "@/components/ui/status-badge"
+import { ConfirmModal } from "@/components/ui/confirm-modal"
 import { CARRIERS } from "@/lib/types"
 import { updateShipment } from "@/app/shipments/actions"
 import { listProducts }   from "@/app/products/actions"
@@ -45,9 +46,10 @@ export default function EditShipmentPage() {
   const [shipProducts,   setShipProducts]   = useState<ShipmentProduct[]>(() => shipment ? shipment.products.map((p) => ({ ...p })) : [])
   const [shipTracking,   setShipTracking]   = useState<ShipmentTracking[]>(() => shipment ? shipment.tracking.map((t) => ({ ...t })) : [])
   const [notes,          setNotes]          = useState<string>(() => shipment?.notes ?? "")
-  const [saved,          setSaved]          = useState(false)
-  const [saving,         setSaving]         = useState(false)
-  const [saveError,      setSaveError]      = useState<string | null>(null)
+  const [saved,           setSaved]           = useState(false)
+  const [saving,          setSaving]          = useState(false)
+  const [saveError,       setSaveError]       = useState<string | null>(null)
+  const [warnBeforeSave,  setWarnBeforeSave]  = useState(false)
 
   if (!shipment) {
     return (
@@ -88,7 +90,17 @@ export default function EditShipmentPage() {
   }
 
   /* ── Save ─────────────────────────────────────────────── */
-  async function handleSave() {
+
+  // Guard: shows warning when rolling back a posted shipment; otherwise delegates to performSave.
+  function handleSave() {
+    const wasReceived = RECEIVED_STATUSES.includes(originalStatus)
+    const nowReceived = RECEIVED_STATUSES.includes(status)
+    const isRollback  = wasReceived && !nowReceived && !!shipment!.isInventoryUpdated
+    if (isRollback) { setWarnBeforeSave(true); return }
+    performSave()
+  }
+
+  async function performSave() {
     setSaveError(null)
 
     const wasReceived = RECEIVED_STATUSES.includes(originalStatus)
@@ -615,6 +627,17 @@ export default function EditShipmentPage() {
           </div>
         )}
       </div>
+
+      {/* Inventory-already-posted warning */}
+      <ConfirmModal
+        isOpen={warnBeforeSave}
+        onClose={() => setWarnBeforeSave(false)}
+        onConfirm={() => { setWarnBeforeSave(false); performSave() }}
+        title="Inventory already posted"
+        message="This shipment has already been added to stock. Changing the status will not automatically adjust inventory. Please make a manual inventory adjustment if needed."
+        confirmLabel="Change Status Anyway"
+        variant="primary"
+      />
     </div>
   )
 }
