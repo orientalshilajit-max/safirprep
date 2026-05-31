@@ -265,7 +265,9 @@ export default function ShipmentsPage() {
 
       setShipments((prev) => prev.map((s) => (s.id === receivingTarget.id ? updated : s)))
 
-      // Re-fetch products so Available/Incoming/Damaged columns update immediately
+      // Re-fetch products so Available/Incoming/Damaged columns update immediately.
+      // router.refresh() also clears the Next.js router cache so navigating to
+      // /products shows the fresh data (paired with revalidatePath on the server).
       try {
         const fresh = await listProducts()
         setProducts(fresh)
@@ -286,6 +288,7 @@ export default function ShipmentsPage() {
         )
       }
 
+      router.refresh()
       setReceivingTarget(null)
     } catch (err) {
       setReceivingError(err instanceof Error ? err.message : "Failed to record receiving.")

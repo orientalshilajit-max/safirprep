@@ -1,5 +1,6 @@
 "use server"
 
+import { revalidatePath } from "next/cache"
 import { createSupabaseServerClient } from "@/lib/supabase-server"
 import { createServerAdminClient }     from "@/lib/supabase"
 import type { Shipment, ShipmentStatus } from "@/lib/types"
@@ -264,6 +265,11 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
   if (!user) throw new Error("Unauthorized")
   const isAdmin = user.app_metadata?.role === "admin"
 
+  // Admin client — used for all writes so that RLS session issues can never
+  // silently swallow an UPDATE (same pattern as archiveShipment).
+  // Ownership is still verified below via the user-session SELECT.
+  const admin = createServerAdminClient()
+
   // Verify ownership + load current state (user session, RLS-filtered)
   const { data: current, error: gErr } = await supabase
     .from("incoming_shipments")
@@ -273,9 +279,9 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
   if (gErr) throw new Error(gErr.message)
 
   type DbStatus = "in_transit" | "arrived" | "received" | "partially_received" | "need_attention"
-  const currentDbStatus  = current.status as DbStatus
+  const currentDbStatus = current.status as DbStatus
   // Consider posted if either column indicates it (handles rows created before migration)
-  const inventoryPosted  =
+  const inventoryPosted =
     (current.inventory_posted_at as string | null) != null ||
     Boolean(current.inventory_synced)
 
@@ -287,9 +293,14 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
   const nowReceived     = RECEIVED_DB.includes(newDbStatus)
   const doInventorySync = isAdmin && !inventoryPosted && nowReceived && !wasReceived
 
-  // Update the shipment row (user session — RLS restricts clients to non-received only)
+  console.log(`[updateShipment] id=${id} user=${user.id} isAdmin=${isAdmin}`)
+  console.log(`[updateShipment] status: ${currentDbStatus} → ${newDbStatus}`)
+  console.log(`[updateShipment] inventoryPosted=${inventoryPosted} wasReceived=${wasReceived} nowReceived=${nowReceived} doInventorySync=${doInventorySync}`)
+
+  // Use admin client for the UPDATE so that RLS session edge-cases can never
+  // block a valid admin operation (ownership already verified by the SELECT above).
   const now = new Date().toISOString()
-  const { error: uErr } = await supabase
+  const { error: uErr } = await admin
     .from("incoming_shipments")
     .update({
       status: newDbStatus,
@@ -297,7 +308,7 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
       ...(doInventorySync ? { inventory_synced: true, inventory_posted_at: now } : {}),
     })
     .eq("id", id)
-  if (uErr) throw new Error(uErr.message)
+  if (uErr) throw new Error(`Shipment update failed: ${uErr.message}`)
 
   const oldItems = (
     current.incoming_shipment_items as { product_id: string; expected_units: number }[]
@@ -306,11 +317,7 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
   const validProducts = input.products.filter((p) => p.productId && p.units > 0)
   const validTracking  = input.tracking.filter((t) => t.carrier)
 
-  // Admin client for child-record operations: no client DELETE RLS exists,
-  // and ownership is already verified by the select above.
-  const admin = createServerAdminClient()
-
-  // Replace items
+  // Replace items (admin client — no client DELETE RLS)
   const { error: dItemErr } = await admin
     .from("incoming_shipment_items")
     .delete()
@@ -365,7 +372,8 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
     const allIds = new Set([...Object.keys(oldMap), ...Object.keys(newMap)])
 
     if (doInventorySync) {
-      // Receive sync: move units from incoming → available/damaged
+      console.log(`[updateShipment] posting inventory for ${allIds.size} product(s)`)
+
       for (const productId of allIds) {
         const oldExpected = oldMap[productId] ?? 0
         const newItem     = validProducts.find((p) => p.productId === productId)
@@ -378,13 +386,21 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
           ? oldExpected
           : (received + damaged)
 
-        const { data: inv } = await admin
+        const { data: inv, error: invSelErr } = await admin
           .from("inventory")
           .select("id, incoming_units, available_units, damaged_units")
           .eq("product_id", productId)
           .maybeSingle()
 
+        if (invSelErr) {
+          console.error(`[inventory] select error for product ${productId}: ${invSelErr.message}`)
+          continue
+        }
+
+        console.log(`[inventory] product=${productId} oldExpected=${oldExpected} received=${received} damaged=${damaged} incomingReduction=${incomingReduction}`)
+
         if (inv) {
+          console.log(`[inventory] before: incoming=${inv.incoming_units} available=${inv.available_units} damaged=${inv.damaged_units}`)
           const { error: invErr } = await admin
             .from("inventory")
             .update({
@@ -393,10 +409,13 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
               damaged_units:   inv.damaged_units   + damaged,
             })
             .eq("id", inv.id)
-          if (invErr) console.error(`[inventory] sync update failed for product ${productId}: ${invErr.message}`)
+          if (invErr) {
+            console.error(`[inventory] update failed for product ${productId}: ${invErr.message}`)
+          } else {
+            console.log(`[inventory] after:  incoming=${Math.max(0, inv.incoming_units - incomingReduction)} available=${inv.available_units + received} damaged=${inv.damaged_units + damaged}`)
+          }
         } else {
-          // No inventory row — create one with the received/damaged values
-          console.error(`[inventory] no row for product ${productId} at receive time — creating`)
+          console.error(`[inventory] no row for product ${productId} — creating`)
           const { data: prod } = await admin
             .from("products").select("client_id").eq("id", productId).single()
           if (prod) {
@@ -408,9 +427,16 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
               damaged_units:   damaged,
             })
             if (insErr) console.error(`[inventory] insert failed for product ${productId}: ${insErr.message}`)
+            else        console.log(`[inventory] created row for product ${productId}: available=${received} damaged=${damaged}`)
           }
         }
       }
+
+      // Invalidate the Next.js full-route and router cache so the client
+      // sees fresh inventory data on the next navigation to these pages.
+      revalidatePath("/products")
+      revalidatePath("/shipments")
+      console.log(`[updateShipment] inventory posted — revalidated /products and /shipments`)
     } else {
       // Pre-receive edit: adjust incoming_units by the diff
       for (const productId of allIds) {
