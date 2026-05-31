@@ -31,6 +31,7 @@ import type { Shipment, ShipmentStatus, DataTableColumn } from "@/lib/types"
 const PAGE_SIZE = 8
 
 const RECEIVED_STATUSES: ShipmentStatus[] = ["Received", "Partially Received"]
+const IN_TRANSIT_STATUSES: ShipmentStatus[] = ["In Transit", "Arrived", "Partially Received"]
 const ALL_STATUSES: ShipmentStatus[] = [
   "In Transit",
   "Arrived",
@@ -114,10 +115,17 @@ export default function ShipmentsPage() {
   /* ── Stat card counts ────────────────────────────────── */
   const active = shipments.filter((s) => !s.isArchived)
   const counts = {
-    "In Transit":     active.filter((s) => s.status === "In Transit").length,
-    Arrived:          active.filter((s) => s.status === "Arrived").length,
-    Received:         active.filter((s) => RECEIVED_STATUSES.includes(s.status)).length,
-    "Need Attention": active.filter((s) => s.status === "Need Attention").length,
+    inTransitUnits: active
+      .filter((s) => IN_TRANSIT_STATUSES.includes(s.status))
+      .reduce((n, s) => {
+        const exp = s.products.reduce((x, p) => x + p.units, 0)
+        const rec = s.products.reduce((x, p) => x + p.receivedUnits, 0)
+        const dmg = s.products.reduce((x, p) => x + p.damagedUnits, 0)
+        return n + Math.max(0, exp - rec - dmg)
+      }, 0),
+    partiallyReceived: active.filter((s) => s.status === "Partially Received").length,
+    received:          active.filter((s) => s.status === "Received").length,
+    needAttention:     active.filter((s) => s.status === "Need Attention").length,
   }
 
   /* ── Filtered + paginated (Active tab) ───────────────── */
@@ -131,8 +139,7 @@ export default function ShipmentsPage() {
         s.tracking.some((t) => t.trackingNumber.toLowerCase().includes(q))
       const matchStatus =
         statusFilter === "all" ||
-        s.status === statusFilter ||
-        (statusFilter === "Received" && RECEIVED_STATUSES.includes(s.status))
+        s.status === statusFilter
       return matchSearch && matchStatus
     })
   }, [active, search, statusFilter])
@@ -394,7 +401,6 @@ export default function ShipmentsPage() {
   function totalReceived(s: Shipment) { return s.products.reduce((n, p) => n + p.receivedUnits, 0) }
   function totalDamaged(s: Shipment)  { return s.products.reduce((n, p) => n + p.damagedUnits,  0) }
 
-  const IN_TRANSIT_STATUSES: ShipmentStatus[] = ["In Transit", "Arrived", "Partially Received"]
   function totalInTransit(s: Shipment) {
     if (!IN_TRANSIT_STATUSES.includes(s.status)) return 0
     return Math.max(0, totalExpected(s) - totalReceived(s) - totalDamaged(s))
@@ -790,24 +796,22 @@ export default function ShipmentsPage() {
       {activeTab === "active" && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <StatCard
-            label="In Transit"
-            value={counts["In Transit"]}
+            label="In Transit Units"
+            value={counts.inTransitUnits}
             icon={Truck}
             iconClass="bg-blue-50 text-blue-600"
-            active={statusFilter === "In Transit"}
-            onClick={() => handleStatClick("In Transit")}
           />
           <StatCard
-            label="Arrived"
-            value={counts.Arrived}
+            label="Partially Received"
+            value={counts.partiallyReceived}
             icon={PackageOpen}
             iconClass="bg-violet-50 text-violet-600"
-            active={statusFilter === "Arrived"}
-            onClick={() => handleStatClick("Arrived")}
+            active={statusFilter === "Partially Received"}
+            onClick={() => handleStatClick("Partially Received")}
           />
           <StatCard
             label="Received"
-            value={counts.Received}
+            value={counts.received}
             icon={PackageCheck}
             iconClass="bg-green-50 text-green-600"
             active={statusFilter === "Received"}
@@ -815,7 +819,7 @@ export default function ShipmentsPage() {
           />
           <StatCard
             label="Need Attention"
-            value={counts["Need Attention"]}
+            value={counts.needAttention}
             icon={AlertTriangle}
             iconClass="bg-red-50 text-red-500"
             active={statusFilter === "Need Attention"}
