@@ -380,10 +380,12 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
         const received    = isAdmin && newItem ? newItem.receivedUnits : 0
         const damaged     = isAdmin && newItem ? newItem.damagedUnits  : 0
 
-        // Both Received and Partially Received clear the full reserved incoming for this
-        // shipment. Missing units (expected − received − damaged) are not tracked in
-        // inventory — they do not stay as "incoming".
-        const incomingReduction = oldExpected
+        // Received: clear all reserved incoming (remaining = missing, nothing more coming).
+        // Partially Received: only subtract what was processed (remaining stays in incoming
+        // because those units are still expected to arrive).
+        const incomingReduction = newDbStatus === "received"
+          ? oldExpected
+          : (received + damaged)
 
         const { data: inv, error: invSelErr } = await admin
           .from("inventory")

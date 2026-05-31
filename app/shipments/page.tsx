@@ -222,9 +222,15 @@ export default function ShipmentsPage() {
   }
 
   /* ── Receiving modal confirm ─────────────────────────── */
-  async function handleReceivingConfirm(results: ReceivingResult[]) {
+  async function handleReceivingConfirm(results: ReceivingResult[], finalStatus: ShipmentStatus) {
     if (!receivingTarget) return
-    const newStatus: ShipmentStatus = receivingMode === "received" ? "Received" : "Partially Received"
+    const newStatus = finalStatus  // determined by the modal (includes in-transit choice)
+
+    // incomingDelta: how much to subtract from incoming_units in the optimistic update.
+    // Received → clear all (remaining = missing); Partially Received → keep in-transit portion.
+    function incomingDelta(r: ReceivingResult) {
+      return newStatus === "Received" ? r.expected : r.received + r.damaged
+    }
 
     if (isMockMode) {
       const updated: Shipment = {
@@ -241,11 +247,10 @@ export default function ShipmentsPage() {
         prev.map((p) => {
           const r = results.find((x) => x.productId === p.id)
           if (!r) return p
-          const incomingDelta = r.expected
           return {
             ...p,
             available: p.available + r.received,
-            incoming:  Math.max(0, p.incoming - incomingDelta),
+            incoming:  Math.max(0, p.incoming - incomingDelta(r)),
             damaged:   p.damaged + r.damaged,
           }
         })
@@ -287,16 +292,15 @@ export default function ShipmentsPage() {
         const fresh = await listProducts()
         setProducts(fresh)
       } catch {
-        // Fallback: optimistic update with correct partial-receive delta
+        // Fallback: optimistic update
         setProducts((prev) =>
           prev.map((p) => {
             const r = results.find((x) => x.productId === p.id)
             if (!r) return p
-            const incomingDelta = r.expected
             return {
               ...p,
               available: p.available + r.received,
-              incoming:  Math.max(0, p.incoming - incomingDelta),
+              incoming:  Math.max(0, p.incoming - incomingDelta(r)),
               damaged:   p.damaged  + r.damaged,
             }
           })
@@ -318,10 +322,21 @@ export default function ShipmentsPage() {
   }
 
   /* ── Totals / helpers ────────────────────────────────── */
-  function totalExpected(s: Shipment)  { return s.products.reduce((n, p) => n + p.units,         0) }
-  function totalReceived(s: Shipment)  { return s.products.reduce((n, p) => n + p.receivedUnits,  0) }
-  function totalDamaged(s: Shipment)   { return s.products.reduce((n, p) => n + p.damagedUnits,   0) }
-  function totalMissing(s: Shipment)   {
+  function totalExpected(s: Shipment) { return s.products.reduce((n, p) => n + p.units,        0) }
+  function totalReceived(s: Shipment) { return s.products.reduce((n, p) => n + p.receivedUnits, 0) }
+  function totalDamaged(s: Shipment)  { return s.products.reduce((n, p) => n + p.damagedUnits,  0) }
+
+  // "In Transit" = remaining units that are still expected to arrive.
+  // Only meaningful for In Transit, Arrived, and Partially Received shipments.
+  const IN_TRANSIT_STATUSES: ShipmentStatus[] = ["In Transit", "Arrived", "Partially Received"]
+  function totalInTransit(s: Shipment) {
+    if (!IN_TRANSIT_STATUSES.includes(s.status)) return 0
+    return Math.max(0, totalExpected(s) - totalReceived(s) - totalDamaged(s))
+  }
+
+  // "Missing" = units confirmed not arriving (remaining on Received / Need Attention).
+  function totalMissing(s: Shipment) {
+    if (IN_TRANSIT_STATUSES.includes(s.status)) return 0
     return Math.max(0, totalExpected(s) - totalReceived(s) - totalDamaged(s))
   }
 
@@ -383,6 +398,20 @@ export default function ShipmentsPage() {
         const n = totalDamaged(row)
         return (
           <span className={`text-[13px] tabular-nums ${n > 0 ? "text-amber-600 font-semibold" : "text-gray-400"}`}>
+            {n.toLocaleString()}
+          </span>
+        )
+      },
+    },
+    {
+      id: "in_transit",
+      header: "In Transit",
+      headerClassName: "text-right",
+      className: "text-right",
+      cell: (row) => {
+        const n = totalInTransit(row)
+        return (
+          <span className={`text-[13px] tabular-nums ${n > 0 ? "text-blue-600 font-semibold" : "text-gray-400"}`}>
             {n.toLocaleString()}
           </span>
         )

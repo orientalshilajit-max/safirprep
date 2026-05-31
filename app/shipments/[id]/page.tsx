@@ -129,7 +129,7 @@ export default function EditShipmentPage() {
           prev.map((p) => {
             const sp = shipProducts.find((x) => x.productId === p.id)
             if (!sp) return p
-            const incomingReduction = sp.units
+            const incomingReduction = status === "Received" ? sp.units : sp.receivedUnits + sp.damagedUnits
             return {
               ...p,
               available: p.available + sp.receivedUnits,
@@ -181,7 +181,7 @@ export default function EditShipmentPage() {
             prev.map((p) => {
               const sp = shipProducts.find((x) => x.productId === p.id)
               if (!sp) return p
-              const incomingReduction = sp.units
+              const incomingReduction = status === "Received" ? sp.units : sp.receivedUnits + sp.damagedUnits
               return {
                 ...p,
                 available: p.available + sp.receivedUnits,
