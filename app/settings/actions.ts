@@ -72,32 +72,56 @@ export async function fetchSettings(): Promise<AllSettings> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || user.app_metadata?.role !== "admin") throw new Error("Admin access required.")
 
+  console.log("[settings] loading company_settings…")
   const [csRes, carRes, stRes] = await Promise.all([
-    supabase.from("company_settings").select("*").single(),
+    // maybeSingle: returns null instead of throwing when 0 rows exist
+    supabase.from("company_settings").select("*").order("updated_at", { ascending: false }).limit(1).maybeSingle(),
     supabase.from("carriers").select("*").order("sort_order").order("name"),
     supabase.from("service_types").select("*").order("sort_order").order("name"),
   ])
 
-  if (csRes.error) throw new Error(csRes.error.message)
-  const cs = csRes.data
+  if (csRes.error) {
+    console.error("[settings] company_settings error:", csRes.error.message)
+    throw new Error(csRes.error.message)
+  }
+
+  console.log("[settings] loading carriers…", carRes.error?.message ?? "ok")
+  console.log("[settings] loading service_types…", stRes.error?.message ?? "ok")
+
+  // If no row exists yet, seed one and use defaults
+  let cs = csRes.data
+  if (!cs) {
+    console.log("[settings] no company_settings row — creating default row")
+    const admin = createServerAdminClient()
+    const { data: inserted, error: insErr } = await admin
+      .from("company_settings")
+      .insert({})
+      .select()
+      .single()
+    if (insErr) {
+      console.error("[settings] failed to create default row:", insErr.message)
+    } else {
+      cs = inserted
+    }
+  }
 
   return {
     company: {
-      companyName: cs.company_name,
-      email: cs.email ?? "",
-      phone: cs.phone ?? "",
-      address: cs.address ?? "",
-      website: cs.website ?? "",
-      logoUrl: cs.logo_url ?? null,
+      companyName: cs?.company_name ?? "Safir Logistics",
+      email:       cs?.email       ?? "",
+      phone:       cs?.phone       ?? "",
+      address:     cs?.address     ?? "",
+      website:     cs?.website     ?? "",
+      logoUrl:     cs?.logo_url    ?? null,
     },
     invoice: {
-      dueDays: cs.invoice_due_days,
-      paymentInstructions: cs.invoice_payment_notes ?? "",
-      invoiceNotes: cs.invoice_default_notes ?? "",
+      dueDays:             cs?.invoice_due_days      ?? 14,
+      paymentInstructions: cs?.invoice_payment_notes ?? "",
+      invoiceNotes:        cs?.invoice_default_notes ?? "",
     },
     users: {
-      inviteSubject: cs.invite_email_subject,
-      inviteMessage: cs.invite_email_body ?? "",
+      inviteSubject: cs?.invite_email_subject ?? "You're invited to the Safir client portal",
+      inviteMessage: cs?.invite_email_body    ?? "",
     },
     carriers: (carRes.data ?? []).map((c) => ({
       id: c.id,
@@ -121,18 +145,39 @@ export async function fetchSettings(): Promise<AllSettings> {
 export async function saveCompanyInfo(data: SettingsCompany): Promise<void> {
   await requireAdmin()
   const admin = createServerAdminClient()
-  const { error } = await admin
+
+  console.log("[settings] saving company_settings…")
+
+  const payload = {
+    company_name: data.companyName.trim() || "Safir Logistics",
+    email:        data.email.trim()   || null,
+    phone:        data.phone.trim()   || null,
+    address:      data.address.trim() || null,
+    website:      data.website.trim() || null,
+    logo_url:     data.logoUrl        || null,
+  }
+
+  // Find the existing row (if any)
+  const { data: existing } = await admin
     .from("company_settings")
-    .update({
-      company_name: data.companyName.trim() || "Safir Logistics",
-      email:        data.email.trim()   || null,
-      phone:        data.phone.trim()   || null,
-      address:      data.address.trim() || null,
-      website:      data.website.trim() || null,
-      logo_url:     data.logoUrl        || null,
-    })
-    .not("id", "is", null)
-  if (error) throw new Error(error.message)
+    .select("id")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (existing?.id) {
+    const { error } = await admin
+      .from("company_settings")
+      .update(payload)
+      .eq("id", existing.id)
+    if (error) throw new Error(error.message)
+  } else {
+    const { error } = await admin
+      .from("company_settings")
+      .insert(payload)
+    if (error) throw new Error(error.message)
+  }
+
   revalidatePath("/settings")
 }
 
@@ -337,15 +382,24 @@ export async function reorderServiceTypes(
 export async function saveInvoiceSettings(data: SettingsInvoice): Promise<void> {
   await requireAdmin()
   const admin = createServerAdminClient()
-  const { error } = await admin
-    .from("company_settings")
-    .update({
-      invoice_due_days:      Math.max(1, data.dueDays),
-      invoice_payment_notes: data.paymentInstructions.trim() || null,
-      invoice_default_notes: data.invoiceNotes.trim()        || null,
-    })
-    .not("id", "is", null)
-  if (error) throw new Error(error.message)
+
+  const payload = {
+    invoice_due_days:      Math.max(1, data.dueDays),
+    invoice_payment_notes: data.paymentInstructions.trim() || null,
+    invoice_default_notes: data.invoiceNotes.trim()        || null,
+  }
+
+  const { data: existing } = await admin
+    .from("company_settings").select("id").order("updated_at", { ascending: false }).limit(1).maybeSingle()
+
+  if (existing?.id) {
+    const { error } = await admin.from("company_settings").update(payload).eq("id", existing.id)
+    if (error) throw new Error(error.message)
+  } else {
+    const { error } = await admin.from("company_settings").insert(payload)
+    if (error) throw new Error(error.message)
+  }
+
   revalidatePath("/settings")
 }
 
@@ -354,13 +408,22 @@ export async function saveInvoiceSettings(data: SettingsInvoice): Promise<void> 
 export async function saveUserSettings(data: SettingsUsers): Promise<void> {
   await requireAdmin()
   const admin = createServerAdminClient()
-  const { error } = await admin
-    .from("company_settings")
-    .update({
-      invite_email_subject: data.inviteSubject.trim() || "You're invited to the Safir client portal",
-      invite_email_body:    data.inviteMessage.trim() || null,
-    })
-    .not("id", "is", null)
-  if (error) throw new Error(error.message)
+
+  const payload = {
+    invite_email_subject: data.inviteSubject.trim() || "You're invited to the Safir client portal",
+    invite_email_body:    data.inviteMessage.trim() || null,
+  }
+
+  const { data: existing } = await admin
+    .from("company_settings").select("id").order("updated_at", { ascending: false }).limit(1).maybeSingle()
+
+  if (existing?.id) {
+    const { error } = await admin.from("company_settings").update(payload).eq("id", existing.id)
+    if (error) throw new Error(error.message)
+  } else {
+    const { error } = await admin.from("company_settings").insert(payload)
+    if (error) throw new Error(error.message)
+  }
+
   revalidatePath("/settings")
 }
