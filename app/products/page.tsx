@@ -158,12 +158,12 @@ export default function ProductsPage() {
       flash("success", "Product deleted permanently.")
       return
     }
-    try {
-      await deleteProductPermanently(id)
+    const result = await deleteProductPermanently(id)
+    if (result.success) {
       setProducts((ps) => ps.filter((p) => p.id !== id))
       flash("success", "Product deleted permanently.")
-    } catch (err) {
-      flash("error", err instanceof Error ? err.message : "Failed to delete product.")
+    } else {
+      flash("error", result.error)
     }
   }
 

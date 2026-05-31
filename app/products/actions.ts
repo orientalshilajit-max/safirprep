@@ -272,12 +272,14 @@ export async function restoreProduct(id: string): Promise<void> {
 const HISTORY_MSG =
   "This product has activity history and cannot be permanently deleted. Archive it instead."
 
-export async function deleteProductPermanently(id: string): Promise<void> {
+type DeleteResult = { success: true } | { success: false; error: string }
+
+export async function deleteProductPermanently(id: string): Promise<DeleteResult> {
   const supabase = await createSupabaseServerClient()
   const admin    = createServerAdminClient()
 
   const { data: { user } } = await supabase.auth.getUser()
-  if (!user) throw new Error("Unauthorized")
+  if (!user) return { success: false, error: "Unauthorized" }
 
   // 1. Inventory quantities must all be zero
   const { data: inv } = await admin
@@ -292,7 +294,7 @@ export async function deleteProductPermanently(id: string): Promise<void> {
       (inv.damaged_units   ?? 0) > 0 ||
       (inv.received_units  ?? 0) > 0 ||
       (inv.shipped_units   ?? 0) > 0
-    if (anyStock) throw new Error(HISTORY_MSG)
+    if (anyStock) return { success: false, error: HISTORY_MSG }
   }
 
   // 2. No shipment line items (FK is RESTRICT — would block anyway, but give a clear message)
@@ -300,14 +302,14 @@ export async function deleteProductPermanently(id: string): Promise<void> {
     .from("incoming_shipment_items")
     .select("id", { count: "exact", head: true })
     .eq("product_id", id)
-  if ((shipCount ?? 0) > 0) throw new Error(HISTORY_MSG)
+  if ((shipCount ?? 0) > 0) return { success: false, error: HISTORY_MSG }
 
   // 3. No service-request line items (FK is RESTRICT)
   const { count: srCount } = await admin
     .from("service_request_items")
     .select("id", { count: "exact", head: true })
     .eq("product_id", id)
-  if ((srCount ?? 0) > 0) throw new Error(HISTORY_MSG)
+  if ((srCount ?? 0) > 0) return { success: false, error: HISTORY_MSG }
 
   // 4. Best-effort: remove product image from storage
   const { data: product } = await admin
@@ -327,7 +329,9 @@ export async function deleteProductPermanently(id: string): Promise<void> {
   // 5. Hard-delete the product row (inventory cascades; files set null)
   const { error: delErr } = await supabase.from("products").delete().eq("id", id)
   if (delErr) {
-    if (delErr.code === "23503") throw new Error(HISTORY_MSG)
-    throw new Error(delErr.message)
+    const msg = delErr.code === "23503" ? HISTORY_MSG : delErr.message
+    return { success: false, error: msg }
   }
+
+  return { success: true }
 }
