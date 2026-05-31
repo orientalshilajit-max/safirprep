@@ -51,6 +51,7 @@ export default function ShipmentsPage() {
   const [statusFilter, setStatusFilter] = useState<ShipmentStatus | "all">("all")
   const [page,         setPage]         = useState(1)
   const [createOpen,   setCreateOpen]   = useState(false)
+  const [editTarget,   setEditTarget]   = useState<Shipment | null>(null)
   const [actionError,  setActionError]  = useState<string | null>(null)
 
   // Active / Archived tabs
@@ -173,6 +174,21 @@ export default function ShipmentsPage() {
       })
     )
     setCreateOpen(false)
+  }
+
+  async function handleEditSave(updated: Shipment) {
+    setShipments((prev) => prev.map((s) => s.id === updated.id ? updated : s))
+    // Refresh products if inventory sync happened (received/partially received)
+    if (updated.isInventoryUpdated && !isMockMode) {
+      try {
+        const fresh = await listProducts()
+        setProducts(fresh)
+      } catch {
+        // leave product state as-is
+      }
+      router.refresh()
+    }
+    setEditTarget(null)
   }
 
   async function handleArchiveConfirm() {
@@ -555,7 +571,7 @@ export default function ShipmentsPage() {
           <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
             <IconButton
               variant="primary"
-              onClick={() => router.push(`/shipments/${row.id}`)}
+              onClick={() => setEditTarget(row)}
               title="Edit"
             >
               <Pencil className="size-3.5" />
@@ -953,11 +969,13 @@ export default function ShipmentsPage() {
         )}
       </div>
 
-      {/* Create modal */}
+      {/* Create / Edit modal — one component handles both modes */}
       <ShipmentModal
-        isOpen={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onSave={handleCreate}
+        isOpen={createOpen || !!editTarget}
+        onClose={() => { setCreateOpen(false); setEditTarget(null) }}
+        onSave={editTarget ? handleEditSave : handleCreate}
+        mode={editTarget ? "edit" : "create"}
+        shipment={editTarget}
         clients={!isMockMode ? pageClients : undefined}
       />
 
