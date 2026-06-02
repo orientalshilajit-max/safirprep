@@ -435,7 +435,7 @@ export default function ClientsPage() {
   return (
     <div className="flex flex-col gap-4 h-full">
       {/* Page header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-[20px] font-bold text-gray-900 leading-tight">Clients</h1>
           <p className="text-[13px] text-gray-400 mt-0.5">
@@ -445,7 +445,7 @@ export default function ClientsPage() {
         {activeTab === "active" && (
           <button
             onClick={openCreate}
-            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm"
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm shrink-0"
           >
             <Plus className="size-4" />
             Add Client
@@ -522,14 +522,14 @@ export default function ClientsPage() {
         </div>
 
         {/* Toolbar */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-200">
-          <div className="relative flex-1 max-w-sm">
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-200">
+          <div className="relative flex-1 min-w-[160px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-gray-400 pointer-events-none" />
             <input
               type="text"
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1) }}
-              placeholder="Search by company, contact, email…"
+              placeholder="Search…"
               className="w-full pl-8 pr-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 bg-gray-50"
             />
           </div>
@@ -557,6 +557,66 @@ export default function ClientsPage() {
               columns={activeTab === "active" ? activeColumns : archivedColumns}
               data={paginated}
               keyExtractor={(c) => c.id}
+              mobileCard={(c) => activeTab === "active" ? (
+                <div className="flex items-center gap-3 px-4 py-3">
+                  <div className={`flex size-9 shrink-0 items-center justify-center rounded-full text-white text-[11px] font-bold select-none ${avatarColor(c.id)}`}>
+                    {initials(c.companyName)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-[13px] font-semibold text-gray-900 truncate max-w-[160px]">{c.companyName}</p>
+                      <StatusBadge status={c.status} />
+                    </div>
+                    <p className="text-[12px] text-gray-500 truncate">{c.contactName}</p>
+                    <p className="text-[11px] text-gray-400 truncate">{c.email}</p>
+                  </div>
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <IconButton variant="primary" title="Edit Client" onClick={() => openEdit(c)}>
+                      <Pencil className="size-3.5" />
+                    </IconButton>
+                    {c.loginStatus === "No Login" && (
+                      <IconButton variant="primary" title="Send Invite" onClick={() => handleSendInvite(c)}
+                        className={inviteSent === c.id ? "text-green-600 bg-green-50" : ""}>
+                        <Mail className="size-3.5" />
+                      </IconButton>
+                    )}
+                    {c.loginStatus === "Invited" && (
+                      <IconButton variant="primary" title="Resend Invite" onClick={() => handleSendInvite(c)}
+                        className={inviteSent === c.id ? "text-green-600 bg-green-50" : ""}>
+                        <MailCheck className="size-3.5" />
+                      </IconButton>
+                    )}
+                    {c.loginStatus === "Active" && (
+                      <IconButton variant="default" title="Reset Password" onClick={() => handleResetPassword(c)}
+                        className={inviteSent === c.id ? "text-green-600 bg-green-50" : ""}>
+                        <KeyRound className="size-3.5" />
+                      </IconButton>
+                    )}
+                    <IconButton variant="danger" title="Archive" onClick={() => setArchiveTarget(c)}>
+                      <Archive className="size-3.5" />
+                    </IconButton>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3 px-4 py-3">
+                  <div className={`flex size-9 shrink-0 items-center justify-center rounded-full text-white text-[11px] font-bold select-none ${avatarColor(c.id)}`}>
+                    {initials(c.companyName)}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-[13px] font-semibold text-gray-900 truncate">{c.companyName}</p>
+                    <p className="text-[12px] text-gray-500 truncate">{c.contactName}</p>
+                    <p className="text-[11px] text-gray-400 truncate">{c.email}</p>
+                  </div>
+                  <div className="flex items-center gap-0.5 shrink-0">
+                    <IconButton variant="primary" title="Restore" onClick={() => handleRestore(c)}>
+                      <ArchiveRestore className="size-3.5" />
+                    </IconButton>
+                    <IconButton variant="danger" title="Delete Permanently" onClick={() => setPermanentDeleteTarget(c)}>
+                      <Trash2 className="size-3.5" />
+                    </IconButton>
+                  </div>
+                </div>
+              )}
               emptyState={
                 <EmptyState
                   title={activeTab === "active" ? "No clients found" : "No archived clients"}

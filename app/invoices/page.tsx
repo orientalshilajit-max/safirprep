@@ -275,8 +275,8 @@ export default function InvoicesPage() {
       {/* Table card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden flex-1 min-h-0">
         {/* Toolbar */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-200">
-          <div className="relative flex-1 max-w-sm">
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-200">
+          <div className="relative flex-1 min-w-[140px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-gray-400 pointer-events-none" />
             <input
               type="text"
@@ -306,6 +306,35 @@ export default function InvoicesPage() {
             columns={columns}
             data={paginated}
             keyExtractor={(inv) => inv.id}
+            mobileCard={(inv) => (
+              <div className="px-4 py-3">
+                <div className="flex items-start justify-between gap-2">
+                  <button onClick={() => setViewing(inv)}
+                    className="font-mono text-[12px] font-semibold text-blue-600 hover:underline">
+                    {inv.invoiceNumber}
+                  </button>
+                  <StatusBadge status={inv.status} />
+                </div>
+                {role === "admin" && (
+                  <p className="text-[12px] text-gray-500 mt-0.5">{inv.clientName}</p>
+                )}
+                <div className="flex items-center justify-between mt-1">
+                  <div className="text-[11px] text-gray-400">
+                    <span>{inv.date}</span>
+                    {inv.dueDate && <span className={`ml-2 ${inv.status === "Overdue" ? "text-red-600 font-semibold" : ""}`}>Due: {inv.dueDate}</span>}
+                  </div>
+                  <span className="text-[14px] font-bold text-gray-900">{fmt(invoiceTotal(inv))}</span>
+                </div>
+                <div className="flex justify-end gap-0.5 mt-2">
+                  <IconButton variant="primary" title="View Invoice" onClick={() => setViewing(inv)}>
+                    <Eye className="size-3.5" />
+                  </IconButton>
+                  <IconButton variant="default" title="Download PDF" onClick={() => {}}>
+                    <Download className="size-3.5" />
+                  </IconButton>
+                </div>
+              </div>
+            )}
             emptyState={
               <EmptyState
                 title="No invoices found"

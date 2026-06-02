@@ -709,14 +709,14 @@ export default function ServiceRequestsPage() {
   return (
     <div className="flex flex-col gap-4 h-full">
       {/* Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-[20px] font-bold text-gray-900 leading-tight">Service Requests</h1>
           <p className="text-[13px] text-gray-400 mt-0.5">Manage your prep and value-add requests</p>
         </div>
         <button
           onClick={openCreate}
-          className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm"
+          className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm shrink-0"
         >
           <Plus className="size-4" />
           New Service Request
@@ -742,14 +742,14 @@ export default function ServiceRequestsPage() {
       {/* Table card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden flex-1 min-h-0">
         {/* Toolbar */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-200">
-          <div className="relative flex-1 max-w-sm">
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-200">
+          <div className="relative flex-1 min-w-[140px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-gray-400 pointer-events-none" />
             <input
               type="text"
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1) }}
-              placeholder="Search by product, service, client…"
+              placeholder="Search…"
               className="w-full pl-8 pr-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 placeholder:text-gray-400 bg-gray-50"
             />
           </div>
@@ -789,6 +789,59 @@ export default function ServiceRequestsPage() {
             columns={columns}
             data={paginated}
             keyExtractor={(r) => r.id}
+            mobileCard={(r) => {
+              const svcs = r.services?.length ? r.services : null
+              const primarySvc = svcs ? svcs[0].serviceName : r.service
+              const extraSvcs  = svcs ? svcs.length - 1 : 0
+              const canEdit = role === "admin" || r.status === "New"
+              const fileCount = isMockMode
+                ? r.files.length
+                : allFiles.filter((f) => f.relatedType === "service-request" && f.relatedId === r.id).length
+              return (
+                <div className="px-4 py-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <span className="font-mono text-[12px] font-semibold text-gray-700">{r.requestNumber}</span>
+                      {role === "admin" && <span className="ml-2 text-[11px] text-gray-400">{r.clientName}</span>}
+                    </div>
+                    {role === "admin" ? (
+                      <button
+                        type="button"
+                        onClick={(e) => handleStatusBadgeClick(e, r)}
+                        className="inline-flex items-center gap-1 rounded-full hover:ring-2 hover:ring-blue-300 focus:outline-none shrink-0"
+                      >
+                        <StatusBadge status={r.status} />
+                        <ChevronDown className="size-3 text-gray-400" />
+                      </button>
+                    ) : (
+                      <StatusBadge status={r.status} />
+                    )}
+                  </div>
+                  <p className="text-[13px] font-medium text-gray-900 truncate mt-1">{r.productName}</p>
+                  <div className="flex flex-wrap gap-2 mt-0.5 text-[12px] text-gray-600">
+                    <span>{primarySvc}{extraSvcs > 0 && <span className="text-gray-400"> +{extraSvcs}</span>}</span>
+                    <span className="text-gray-400">·</span>
+                    <span>Qty: <b className="text-gray-800">{r.quantity.toLocaleString()}</b></span>
+                    {fileCount > 0 && (
+                      <button type="button" onClick={() => setFilesPreview(r)}
+                        className="inline-flex items-center gap-1 text-blue-600">
+                        <FileText className="size-3" /><b>{fileCount}</b>
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex justify-end gap-0.5 mt-2">
+                    {canEdit && (
+                      <IconButton variant="primary" onClick={() => openEdit(r)} title="Edit">
+                        <Pencil className="size-3.5" />
+                      </IconButton>
+                    )}
+                    <IconButton variant="danger" onClick={() => setArchiveTarget(r)} title="Archive">
+                      <Archive className="size-3.5" />
+                    </IconButton>
+                  </div>
+                </div>
+              )
+            }}
             emptyState={
               <EmptyState
                 title="No service requests found"

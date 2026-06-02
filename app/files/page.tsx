@@ -304,7 +304,7 @@ export default function FilesPage() {
   return (
     <div className="flex flex-col gap-4 h-full">
       {/* Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-[20px] font-bold text-gray-900 leading-tight">Files & Documents</h1>
           <p className="text-[13px] text-gray-400 mt-0.5">
@@ -313,7 +313,7 @@ export default function FilesPage() {
         </div>
         <button
           onClick={() => setUploadOpen(true)}
-          className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm"
+          className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm shrink-0"
         >
           <Plus className="size-4" />
           Upload File
@@ -359,8 +359,8 @@ export default function FilesPage() {
       {/* Table card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden flex-1 min-h-0">
         {/* Toolbar */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-200">
-          <div className="relative flex-1 max-w-sm">
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-200">
+          <div className="relative flex-1 min-w-[140px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-gray-400 pointer-events-none" />
             <input
               type="text"
@@ -387,6 +387,32 @@ export default function FilesPage() {
             columns={columns}
             data={paginated}
             keyExtractor={(f) => f.id}
+            mobileCard={(f) => (
+              <div className="flex items-center gap-3 px-4 py-3">
+                <FileThumbnail file={f} onClick={() => setPreviewFile(f)} />
+                <div className="flex-1 min-w-0">
+                  <p
+                    className="text-[13px] font-medium text-gray-900 truncate cursor-pointer hover:text-blue-600 transition-colors"
+                    onClick={() => setPreviewFile(f)}
+                  >
+                    {f.name}
+                  </p>
+                  <div className="flex items-center gap-1.5 mt-0.5">
+                    <ExtBadge ext={f.ext} />
+                    <span className="text-[11px] text-gray-400">{f.size}</span>
+                    <span className="text-[11px] text-gray-400">·</span>
+                    <span className="text-[11px] text-gray-500">{f.category}</span>
+                  </div>
+                  {role === "admin" && (
+                    <p className="text-[11px] text-gray-400 truncate">{f.clientName}</p>
+                  )}
+                  <p className="font-mono text-[11px] text-gray-400 truncate">{f.relatedTo}</p>
+                </div>
+                <IconButton variant="primary" title="Download" onClick={() => handleDownload(f)}>
+                  <Download className="size-3.5" />
+                </IconButton>
+              </div>
+            )}
             emptyState={
               <EmptyState
                 title="No files found"

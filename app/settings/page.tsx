@@ -56,7 +56,7 @@ function SectionCard({
 }) {
   return (
     <div id={id} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden scroll-mt-4">
-      <div className="flex items-center gap-3 px-6 py-4 border-b border-gray-100 bg-gray-50/60">
+      <div className="flex items-center gap-3 px-4 sm:px-6 py-4 border-b border-gray-100 bg-gray-50/60">
         <div className="flex size-8 items-center justify-center rounded-lg bg-blue-50 shrink-0">
           <Icon className="size-4 text-blue-600" />
         </div>
@@ -65,7 +65,7 @@ function SectionCard({
           <p className="text-[12px] text-gray-400">{description}</p>
         </div>
       </div>
-      <div className="px-6 py-5">{children}</div>
+      <div className="px-4 sm:px-6 py-4 sm:py-5">{children}</div>
     </div>
   )
 }
@@ -1083,10 +1083,29 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="flex gap-6 h-full min-h-0">
-      {/* ── Left nav ── */}
-      <nav className="w-[180px] shrink-0">
-        <div className="sticky top-0 space-y-0.5">
+    <div className="flex flex-col md:flex-row gap-4 md:gap-6 h-full min-h-0">
+      {/* ── Nav — horizontal scroll on mobile, vertical sidebar on desktop ── */}
+      <nav className="md:w-[180px] md:shrink-0">
+        {/* Mobile: horizontal pill nav */}
+        <div className="flex md:hidden gap-1 overflow-x-auto pb-1 scrollbar-hide">
+          {SECTIONS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => scrollTo(id)}
+              className={cn(
+                "flex items-center gap-1.5 shrink-0 px-3 py-1.5 rounded-full text-[12px] font-medium transition-colors whitespace-nowrap",
+                activeSection === id
+                  ? "bg-blue-600 text-white"
+                  : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+              )}
+            >
+              <Icon className="size-3.5 shrink-0" />
+              {label}
+            </button>
+          ))}
+        </div>
+        {/* Desktop: sticky vertical nav */}
+        <div className="hidden md:block sticky top-0 space-y-0.5">
           <p className="px-3 py-2 text-[10px] font-bold text-gray-400 uppercase tracking-widest">
             Settings
           </p>
@@ -1162,7 +1181,7 @@ export default function SettingsPage() {
               </div>
             </Field>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <Field label="Company Name">
                 <input
                   value={company.companyName}

@@ -123,7 +123,7 @@ export function ClientModal({ isOpen, onClose, onSave, client }: ClientModalProp
     >
       <form id="client-form" onSubmit={handleSubmit} className="space-y-4">
         {/* Company + Contact row */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-[12px] font-semibold text-gray-700 mb-1.5">
               Company Name <span className="text-red-500">*</span>
@@ -178,7 +178,7 @@ export function ClientModal({ isOpen, onClose, onSave, client }: ClientModalProp
         </div>
 
         {/* Phone + Status row */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-[12px] font-semibold text-gray-700 mb-1.5">
               Phone <span className="text-gray-400 font-normal">(optional)</span>

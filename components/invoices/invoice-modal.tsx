@@ -239,7 +239,7 @@ export function InvoiceModal({ invoice, role, onClose, onSave }: InvoiceModalPro
         </div>
 
         {/* ── Meta grid ── */}
-        <div className="grid grid-cols-2 gap-4 pt-1">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
           {/* Bill To */}
           <div className="rounded-lg border border-gray-100 bg-gray-50 p-3.5">
             <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-1.5">Bill To</p>

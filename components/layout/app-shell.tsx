@@ -126,6 +126,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [authLoading,  setAuthLoading]  = useState(!isMockMode)
   // Role: sourced from JWT in auth mode, from toggle in mock mode
   const [role, setRole] = useState<UserRole>("client")
+  // ── Mobile sidebar ──────────────────────────────────────────
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   // ── Data state ───────────────────────────────────────────────
   // In mock mode: pre-populated with mock data.
@@ -304,7 +306,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       }}
     >
       <div className="flex h-screen bg-slate-50 overflow-hidden">
-        <Sidebar role={role} />
+        <Sidebar
+          role={role}
+          isOpen={sidebarOpen}
+          onClose={() => setSidebarOpen(false)}
+        />
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
           <Header
             role={role}
@@ -314,8 +320,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             onLogout={handleLogout}
             onRefresh={refreshAll}
             isRefreshing={isRefreshing}
+            onMenuToggle={() => setSidebarOpen(true)}
           />
-          <main className="flex-1 overflow-y-auto p-6">
+          <main className="flex-1 overflow-y-auto p-4 sm:p-6">
             {children}
           </main>
         </div>

@@ -52,7 +52,7 @@ export function Modal({
   return createPortal(
     <div
       style={{ zIndex }}
-      className="fixed inset-0 flex items-center justify-center p-4"
+      className="fixed inset-0 flex items-end sm:items-center justify-center sm:p-4"
       aria-modal="true"
       role="dialog"
     >
@@ -63,11 +63,16 @@ export function Modal({
       />
       <div
         className={cn(
-          "relative w-full bg-white rounded-xl shadow-2xl flex flex-col max-h-[90vh]",
+          "relative w-full bg-white flex flex-col",
+          // Mobile: bottom sheet style — no side padding, rounded top corners only
+          "rounded-t-2xl sm:rounded-xl",
+          // Mobile: use almost full viewport height; desktop: cap at 90vh
+          "max-h-[92dvh] sm:max-h-[90vh]",
+          "shadow-2xl",
           widths[size]
         )}
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-gray-200 shrink-0">
           <h2 className="text-[15px] font-semibold text-gray-900">{title}</h2>
           <button
             onClick={onClose}
@@ -76,9 +81,9 @@ export function Modal({
             <X className="size-4" />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto px-6 py-5">{children}</div>
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 sm:py-5">{children}</div>
         {footer && (
-          <div className="px-6 py-4 border-t border-gray-200 bg-gray-50/60 shrink-0 rounded-b-xl">
+          <div className="px-4 sm:px-6 py-4 border-t border-gray-200 bg-gray-50/60 shrink-0 rounded-b-2xl sm:rounded-b-xl">
             {footer}
           </div>
         )}

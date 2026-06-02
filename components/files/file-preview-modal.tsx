@@ -137,7 +137,7 @@ export function FilePreviewModal({ file, onClose }: FilePreviewModalProps) {
 
         {/* Meta + actions */}
         <div className="shrink-0 px-5 py-4 border-t border-gray-200 bg-gray-50/60">
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 mb-4">
             <div>
               <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Uploaded By</p>
               <p className="text-[13px] text-gray-700 mt-0.5">{file.uploadedBy}</p>

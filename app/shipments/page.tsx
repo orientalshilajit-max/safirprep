@@ -787,7 +787,7 @@ export default function ShipmentsPage() {
   return (
     <div className="flex flex-col gap-4 h-full">
       {/* Header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-[20px] font-bold text-gray-900 leading-tight">
             Incoming Shipments
@@ -796,7 +796,7 @@ export default function ShipmentsPage() {
         </div>
         <button
           onClick={() => setCreateOpen(true)}
-          className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm"
+          className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm shrink-0"
         >
           <Plus className="size-4" />
           Create Shipment
@@ -850,7 +850,7 @@ export default function ShipmentsPage() {
       {/* Table card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden flex-1 min-h-0">
         {/* Toolbar */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-200">
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-200">
           {/* Tabs */}
           <div className="flex items-center gap-0 mr-2 rounded-lg border border-gray-200 bg-gray-50 p-0.5 shrink-0">
             <button
@@ -914,6 +914,47 @@ export default function ShipmentsPage() {
                 columns={activeColumns}
                 data={paginated}
                 keyExtractor={(s) => s.id}
+                mobileCard={(s) => (
+                  <div className="px-4 py-3">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <span className="font-mono text-[12px] font-semibold text-gray-700">{s.shipmentNumber}</span>
+                        {role === "admin" && <span className="ml-2 text-[11px] text-gray-400">{s.clientName}</span>}
+                      </div>
+                      {role === "admin" ? (
+                        <button
+                          type="button"
+                          onClick={(e) => handleStatusBadgeClick(e, s)}
+                          className="inline-flex items-center gap-1 rounded-full hover:ring-2 hover:ring-blue-300 focus:outline-none shrink-0"
+                        >
+                          <StatusBadge status={s.status} />
+                          <ChevronDown className="size-3 text-gray-400" />
+                        </button>
+                      ) : (
+                        <StatusBadge status={s.status} />
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-3 mt-1.5 text-[12px] text-gray-600">
+                      <span>Expected: <b className="text-gray-900">{totalExpected(s).toLocaleString()}</b></span>
+                      <span>Received: <b className="text-gray-900">{totalReceived(s).toLocaleString()}</b></span>
+                      {totalDamaged(s) > 0 && <span className="text-amber-600">Damaged: <b>{totalDamaged(s).toLocaleString()}</b></span>}
+                      {totalInTransit(s) > 0 && <span className="text-blue-600">In Transit: <b>{totalInTransit(s).toLocaleString()}</b></span>}
+                    </div>
+                    {s.tracking.length > 0 && (
+                      <p className="font-mono text-[11px] text-gray-400 truncate mt-0.5">{primaryTracking(s)} · {s.tracking[0]?.carrier ?? ""}</p>
+                    )}
+                    <div className="flex justify-end gap-0.5 mt-2">
+                      <IconButton variant="primary" onClick={() => setEditTarget(s)} title="Edit">
+                        <Pencil className="size-3.5" />
+                      </IconButton>
+                      {(role === "admin" || !RECEIVED_STATUSES.includes(s.status)) && (
+                        <IconButton variant="default" onClick={() => setArchiveTarget(s)} title="Archive">
+                          <Archive className="size-3.5" />
+                        </IconButton>
+                      )}
+                    </div>
+                  </div>
+                )}
                 emptyState={
                   <EmptyState
                     title="No shipments found"
@@ -954,6 +995,32 @@ export default function ShipmentsPage() {
                   columns={archivedColumns}
                   data={paginatedArchived}
                   keyExtractor={(s) => s.id}
+                  mobileCard={(s) => (
+                    <div className="px-4 py-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <span className="font-mono text-[12px] font-semibold text-gray-700">{s.shipmentNumber}</span>
+                          {role === "admin" && <span className="ml-2 text-[11px] text-gray-400">{s.clientName}</span>}
+                        </div>
+                        <StatusBadge status={s.status} />
+                      </div>
+                      <div className="flex flex-wrap gap-3 mt-1 text-[12px] text-gray-600">
+                        <span>Expected: <b className="text-gray-900">{totalExpected(s).toLocaleString()}</b></span>
+                        <span>Received: <b className="text-gray-900">{totalReceived(s).toLocaleString()}</b></span>
+                      </div>
+                      {s.archivedAt && <p className="text-[11px] text-gray-400 mt-0.5">Archived: {s.archivedAt}</p>}
+                      <div className="flex justify-end gap-0.5 mt-2">
+                        <IconButton variant="primary" onClick={() => setRestoreTarget(s)} title="Restore">
+                          <RotateCcw className="size-3.5" />
+                        </IconButton>
+                        {role === "admin" && (
+                          <IconButton variant="danger" onClick={() => setPermDeleteTarget(s)} title="Delete Permanently">
+                            <Trash2 className="size-3.5" />
+                          </IconButton>
+                        )}
+                      </div>
+                    </div>
+                  )}
                   emptyState={
                     <EmptyState
                       title="No archived shipments"

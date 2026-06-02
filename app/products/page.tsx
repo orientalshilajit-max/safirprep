@@ -304,14 +304,14 @@ export default function ProductsPage() {
   return (
     <div className="flex flex-col gap-4 h-full">
       {/* Page header */}
-      <div className="flex items-start justify-between">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-[20px] font-bold text-gray-900 leading-tight">Products</h1>
           <p className="text-[13px] text-gray-400 mt-0.5">Manage your products</p>
         </div>
         <button
           onClick={openAdd}
-          className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm"
+          className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm shrink-0"
         >
           <Plus className="size-4" />
           Add Product
@@ -347,8 +347,8 @@ export default function ProductsPage() {
       {/* Table card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden flex-1 min-h-0">
         {/* Toolbar */}
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-gray-200">
-          <div className="relative flex-1 max-w-sm">
+        <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-200">
+          <div className="relative flex-1 min-w-[140px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-3.5 text-gray-400 pointer-events-none" />
             <input
               type="text"
@@ -381,6 +381,46 @@ export default function ProductsPage() {
             columns={columns}
             data={paginated}
             keyExtractor={(p) => p.id}
+            mobileCard={(p, i) => (
+              <div className="flex items-center gap-3 px-4 py-3">
+                <ProductThumbnail src={p.image} name={p.name} index={i} size="md" />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-[13px] font-semibold text-gray-900 truncate max-w-[180px]">{p.name}</p>
+                    <StatusBadge status={p.status} />
+                  </div>
+                  <p className="font-mono text-[11px] text-gray-400">{p.sku}</p>
+                  {role === "admin" && p.clientName && (
+                    <p className="text-[11px] text-gray-500">{p.clientName}</p>
+                  )}
+                  <div className="flex gap-3 mt-0.5 text-[12px]">
+                    <span className="text-gray-700">Available: <span className="font-semibold">{p.available.toLocaleString()}</span></span>
+                    {p.incoming > 0 && (
+                      <span className="text-blue-600 font-semibold">+{p.incoming.toLocaleString()} in</span>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <IconButton variant="primary" onClick={() => openEdit(p)} title="Edit">
+                    <Pencil className="size-3.5" />
+                  </IconButton>
+                  {p.status === "Active" ? (
+                    <IconButton variant="danger" onClick={() => handleArchive(p.id)} title="Archive">
+                      <Archive className="size-3.5" />
+                    </IconButton>
+                  ) : (
+                    <>
+                      <IconButton variant="primary" onClick={() => handleRestore(p.id)} title="Restore">
+                        <ArchiveRestore className="size-3.5" />
+                      </IconButton>
+                      <IconButton variant="danger" onClick={() => setDeleteTarget(p)} title="Delete">
+                        <Trash2 className="size-3.5" />
+                      </IconButton>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
             emptyState={
               <EmptyState
                 title="No products found"
