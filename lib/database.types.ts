@@ -564,6 +564,7 @@ export type Database = {
           file_type: string | null
           file_size_bytes: number | null
           uploaded_by: string | null
+          uploaded_by_name: string | null
           created_at: string
           deleted_at: string | null
         }
@@ -581,6 +582,7 @@ export type Database = {
           file_type?: string | null
           file_size_bytes?: number | null
           uploaded_by?: string | null
+          uploaded_by_name?: string | null
           created_at?: string
           deleted_at?: string | null
         }
@@ -598,6 +600,7 @@ export type Database = {
           file_type?: string | null
           file_size_bytes?: number | null
           uploaded_by?: string | null
+          uploaded_by_name?: string | null
           created_at?: string
           deleted_at?: string | null
         }

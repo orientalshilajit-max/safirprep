@@ -49,20 +49,21 @@ function formatBytes(bytes: number): string {
 // ── Row type ──────────────────────────────────────────────────
 
 type DbFileRow = {
-  id:             string
-  client_id:      string
-  product_id:     string | null
-  shipment_id:    string | null
-  request_id:     string | null
-  invoice_id:     string | null
-  category:       string
-  file_name:      string
-  file_url:       string
-  thumbnail_url:  string | null
-  file_type:      string | null
-  file_size_bytes: number | null
-  uploaded_by:    string | null
-  created_at:     string
+  id:               string
+  client_id:        string
+  product_id:       string | null
+  shipment_id:      string | null
+  request_id:       string | null
+  invoice_id:       string | null
+  category:         string
+  file_name:        string
+  file_url:         string
+  thumbnail_url:    string | null
+  file_type:        string | null
+  file_size_bytes:  number | null
+  uploaded_by:      string | null  // uuid — auth.users.id
+  uploaded_by_name: string | null  // text — human-readable display name
+  created_at:       string
   clients:               { company_name: string } | null
   products:              { name: string }         | null
   incoming_shipments:    { shipment_number: string } | null
@@ -101,7 +102,7 @@ function mapRow(row: DbFileRow): FileDoc {
     relatedId,
     clientId:    row.client_id,
     clientName:  row.clients?.company_name ?? "",
-    uploadedBy:  row.uploaded_by ?? "",
+    uploadedBy:  row.uploaded_by_name ?? "",
     uploadedAt:  new Date(row.created_at).toLocaleDateString("en-US", {
       month: "short", day: "numeric", year: "numeric",
     }),
@@ -112,7 +113,7 @@ function mapRow(row: DbFileRow): FileDoc {
 const FILE_SELECT = `
   id, client_id, product_id, shipment_id, request_id, invoice_id,
   category, file_name, file_url, thumbnail_url,
-  file_type, file_size_bytes, uploaded_by, created_at,
+  file_type, file_size_bytes, uploaded_by, uploaded_by_name, created_at,
   clients (company_name),
   products (name),
   incoming_shipments (shipment_number),
@@ -172,11 +173,13 @@ export async function uploadFile(formData: FormData): Promise<FileDoc> {
   const file = formData.get("file") as File | null
   if (!file || file.size === 0) throw new Error("No file selected.")
 
-  const category    = (formData.get("category")   as FileCategory) ?? "Other"
-  const productId   = (formData.get("productId")  as string | null) || null
-  const shipmentId  = (formData.get("shipmentId") as string | null) || null
-  const requestId   = (formData.get("requestId")  as string | null) || null
-  const uploadedBy  = (formData.get("uploadedBy") as string | null) ?? ""
+  const category       = (formData.get("category")      as FileCategory) ?? "Other"
+  const productId      = (formData.get("productId")     as string | null) || null
+  const shipmentId     = (formData.get("shipmentId")    as string | null) || null
+  const requestId      = (formData.get("requestId")     as string | null) || null
+  // uploadedBy is a human-readable display name (e.g. company name) — stored in uploaded_by_name text column.
+  // The uuid uploaded_by column receives user.id from the authenticated session.
+  const uploadedByName = (formData.get("uploadedBy")    as string | null) ?? ""
 
   // Sanitize filename: lowercase, replace non-alphanumeric runs with hyphens
   const rawExt  = file.name.includes(".") ? file.name.split(".").pop()!.toLowerCase() : ""
@@ -205,20 +208,23 @@ export async function uploadFile(formData: FormData): Promise<FileDoc> {
     .from(STORAGE_BUCKET)
     .getPublicUrl(storagePath)
 
-  // Insert file record — user client respects DB RLS
+  // Insert file record — user client respects DB RLS.
+  // uploaded_by (uuid) = authenticated user's auth.users.id
+  // uploaded_by_name (text) = human-readable display name passed from the client
   const { data: record, error: dbErr } = await supabase
     .from("files")
     .insert({
-      client_id:       clientId,
-      product_id:      productId,
-      shipment_id:     shipmentId,
-      request_id:      requestId,
-      category:        (CATEGORY_TO_DB[category] ?? "other") as "agreements" | "labels" | "shipment_docs" | "product_docs" | "invoices" | "other",
-      file_name:       file.name,
-      file_url:        publicUrl,
-      file_type:       file.type || null,
-      file_size_bytes: file.size,
-      uploaded_by:     uploadedBy || null,
+      client_id:        clientId,
+      product_id:       productId,
+      shipment_id:      shipmentId,
+      request_id:       requestId,
+      category:         (CATEGORY_TO_DB[category] ?? "other") as "agreements" | "labels" | "shipment_docs" | "product_docs" | "invoices" | "other",
+      file_name:        file.name,
+      file_url:         publicUrl,
+      file_type:        file.type || null,
+      file_size_bytes:  file.size,
+      uploaded_by:      user.id,
+      uploaded_by_name: uploadedByName || null,
     })
     .select("id")
     .single()
