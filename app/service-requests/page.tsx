@@ -17,6 +17,7 @@ import { EmptyState } from "@/components/ui/empty-state"
 import { StatCard } from "@/components/ui/stat-card"
 import { ConfirmModal } from "@/components/ui/confirm-modal"
 import { RequestModal, type RequestFormData } from "@/components/service-requests/request-modal"
+import { RequestFilesModal } from "@/components/service-requests/request-files-modal"
 import { SERVICE_TYPES } from "@/lib/types"
 import {
   createRequest,
@@ -60,6 +61,7 @@ export default function ServiceRequestsPage() {
   const [modalOpen,     setModalOpen]     = useState(false)
   const [editing,       setEditing]       = useState<ServiceRequest | null>(null)
   const [archiveTarget, setArchiveTarget] = useState<ServiceRequest | null>(null)
+  const [filesPreview,  setFilesPreview]  = useState<ServiceRequest | null>(null)
 
   // Client list for admin's modal selector (Supabase mode only)
   const [pageClients, setPageClients] = useState<{ id: string; name: string }[]>([])
@@ -557,10 +559,15 @@ export default function ServiceRequestsPage() {
         return count === 0 ? (
           <span className="text-[12px] text-gray-300">—</span>
         ) : (
-          <div className="flex items-center justify-center gap-1">
-            <FileText className="size-3.5 text-gray-400" />
-            <span className="text-[12px] font-semibold text-gray-600">{count}</span>
-          </div>
+          <button
+            type="button"
+            onClick={() => setFilesPreview(row)}
+            className="inline-flex items-center justify-center gap-1 rounded-md px-1.5 py-0.5 transition-colors hover:bg-blue-50"
+            title={`View ${count} file${count !== 1 ? "s" : ""}`}
+          >
+            <FileText className="size-3.5 text-blue-500" />
+            <span className="text-[12px] font-semibold text-blue-600">{count}</span>
+          </button>
         )
       },
     },
@@ -760,6 +767,18 @@ export default function ServiceRequestsPage() {
         onRetryUpload={retryUploadState ? handleRetryUpload : undefined}
         request={editing}
         clients={!isMockMode ? pageClients : undefined}
+      />
+
+      {/* Files preview modal */}
+      <RequestFilesModal
+        isOpen={!!filesPreview}
+        onClose={() => setFilesPreview(null)}
+        requestNumber={filesPreview?.requestNumber ?? ""}
+        files={
+          filesPreview
+            ? allFiles.filter((f) => f.relatedType === "service-request" && f.relatedId === filesPreview.id)
+            : []
+        }
       />
 
       {/* Archive confirm */}
