@@ -1,13 +1,13 @@
 "use client"
 
 import { useRef, useState, useEffect, useMemo } from "react"
-import { FileText, Upload, X, Plus, AlertCircle } from "lucide-react"
+import { FileText, Upload, X, Plus, AlertCircle, Download } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
-import { useProducts, useRole, useIsMockMode } from "@/components/layout/app-shell"
+import { useProducts, useRole, useIsMockMode, useFiles } from "@/components/layout/app-shell"
 import { listAvailableServiceTypes } from "@/app/service-requests/actions"
 import type { AvailableServiceType } from "@/app/service-requests/actions"
 import { SERVICE_TYPES } from "@/lib/types"
-import type { ServiceFile, ServiceRequest, ServiceStatus } from "@/lib/types"
+import type { FileDoc, ServiceFile, ServiceRequest, ServiceStatus } from "@/lib/types"
 
 const uid = () => Math.random().toString(36).slice(2)
 
@@ -26,6 +26,18 @@ function formatSize(bytes: number) {
     : `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
+/* ── File type helpers ──────────────────────────────────── */
+const IMAGE_EXTS  = new Set(["jpg", "jpeg", "png", "gif", "webp", "svg"])
+const WORD_EXTS   = new Set(["doc", "docx"])
+const EXCEL_EXTS  = new Set(["xls", "xlsx", "csv"])
+
+function fileIconClass(ext: string) {
+  if (WORD_EXTS.has(ext))  return "bg-blue-100 text-blue-500"
+  if (EXCEL_EXTS.has(ext)) return "bg-green-100 text-green-600"
+  if (ext === "pdf")        return "bg-red-100 text-red-500"
+  return "bg-gray-100 text-gray-500"
+}
+
 /* ── Reusable upload button ─────────────────────────────── */
 function UploadBtn({
   label,
@@ -33,19 +45,25 @@ function UploadBtn({
   optional = false,
 }: {
   label: string
-  onAdd: (files: ServiceFile[]) => void
+  onAdd: (meta: ServiceFile[], raw: File[]) => void
   optional?: boolean
 }) {
   const ref = useRef<HTMLInputElement>(null)
 
   function handle(e: React.ChangeEvent<HTMLInputElement>) {
-    const picked = Array.from(e.target.files || []).map((f) => ({
-      id: uid(),
-      name: f.name,
-      type: f.name.split(".").pop()?.toLowerCase() || "file",
-      size: formatSize(f.size),
-    }))
-    if (picked.length) onAdd(picked)
+    const picked = Array.from(e.target.files || [])
+    if (!picked.length) return
+    const meta: ServiceFile[] = picked.map((f) => {
+      const ext = f.name.split(".").pop()?.toLowerCase() || "file"
+      return {
+        id:       uid(),
+        name:     f.name,
+        type:     ext,
+        size:     formatSize(f.size),
+        localUrl: f.type.startsWith("image/") ? URL.createObjectURL(f) : undefined,
+      }
+    })
+    onAdd(meta, picked)
     e.target.value = ""
   }
 
@@ -65,21 +83,64 @@ function UploadBtn({
   )
 }
 
-/* ── File chip ──────────────────────────────────────────── */
-function FileChip({ file, onRemove }: { file: ServiceFile; onRemove: (id: string) => void }) {
+/* ── Pending file card (with preview, removable) ────────── */
+function FileCard({ file, onRemove }: { file: ServiceFile; onRemove: (id: string) => void }) {
+  const ext = file.type.toLowerCase()
+  const isImage = !!file.localUrl
+
   return (
-    <div className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] text-gray-700 bg-gray-100 rounded-full max-w-[200px]">
-      <FileText className="size-3 shrink-0 text-gray-400" />
-      <span className="truncate">{file.name}</span>
-      <span className="text-gray-400 shrink-0">· {file.size}</span>
+    <div className="flex items-center gap-2 px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-lg max-w-[240px]">
+      {isImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={file.localUrl} alt={file.name} className="w-8 h-8 shrink-0 rounded object-cover" />
+      ) : (
+        <div className={`w-8 h-8 shrink-0 rounded flex items-center justify-center ${fileIconClass(ext)}`}>
+          <FileText className="size-3.5" />
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="text-[11px] font-medium text-gray-700 truncate leading-tight">{file.name}</p>
+        <p className="text-[10px] text-gray-400">{file.size}</p>
+      </div>
       <button
         type="button"
         onClick={() => onRemove(file.id)}
-        className="ml-0.5 text-gray-400 hover:text-red-500 shrink-0"
+        className="shrink-0 text-gray-300 hover:text-red-500 transition-colors ml-1"
+        title="Remove"
       >
-        <X className="size-2.5" />
+        <X className="size-3.5" />
       </button>
     </div>
+  )
+}
+
+/* ── Existing (already-uploaded) file row ───────────────── */
+function ExistingFileRow({ file }: { file: FileDoc }) {
+  const ext = file.ext.toLowerCase()
+  const isImage = IMAGE_EXTS.has(ext)
+
+  return (
+    <a
+      href={file.fileUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={`Download ${file.name}`}
+      className="flex items-center gap-2 px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-lg max-w-[240px] hover:bg-gray-100 transition-colors group"
+    >
+      {isImage && file.fileUrl ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={file.fileUrl} alt={file.name} className="w-8 h-8 shrink-0 rounded object-cover" />
+      ) : (
+        <div className={`w-8 h-8 shrink-0 rounded flex items-center justify-center ${fileIconClass(ext)}`}>
+          <FileText className="size-3.5" />
+        </div>
+      )}
+      <div className="min-w-0 flex-1">
+        <p className="text-[11px] font-medium text-gray-700 truncate leading-tight">{file.name}</p>
+        <p className="text-[10px] text-gray-400">{file.size}</p>
+      </div>
+      <Download className="size-3 shrink-0 text-gray-300 group-hover:text-blue-500 transition-colors ml-1" />
+    </a>
   )
 }
 
@@ -116,7 +177,10 @@ type FormState = {
   quantity: number
   useAllAvailable: boolean
   services: ServiceRowState[]
+  /** Metadata for newly-selected (not yet uploaded) files. */
   files: ServiceFile[]
+  /** Raw File objects keyed by ServiceFile.id, for upload on save. */
+  pendingFiles: Record<string, File>
   notes: string
   status: ServiceStatus
   prepNotes: string
@@ -134,6 +198,7 @@ const emptyForm = (): FormState => ({
   useAllAvailable: false,
   services: [{ rowId: uid(), serviceTypeId: null, serviceName: "", notes: "" }],
   files: [],
+  pendingFiles: {},
   notes: "",
   status: "New",
   prepNotes: "",
@@ -161,14 +226,15 @@ type RequestModalProps = {
 }
 
 export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }: RequestModalProps) {
-  const { role }      = useRole()
-  const { products }  = useProducts()
-  const isMockMode    = useIsMockMode()
+  const { role }     = useRole()
+  const { products } = useProducts()
+  const isMockMode   = useIsMockMode()
+  const { files: allFiles } = useFiles()
 
-  const [form,     setFormState] = useState<FormState>(emptyForm())
-  const [error,    setError]     = useState("")
+  const [form,      setFormState] = useState<FormState>(emptyForm())
+  const [error,     setError]     = useState("")
   const [saveError, setSaveError] = useState("")
-  const [saving,   setSaving]    = useState(false)
+  const [saving,    setSaving]    = useState(false)
   const [fetchedServiceTypes, setFetchedServiceTypes] = useState<AvailableServiceType[]>([])
 
   const mockServiceTypes = useMemo<AvailableServiceType[]>(
@@ -197,7 +263,8 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
                 notes:         s.notes,
               }))
             : [{ rowId: uid(), serviceTypeId: null, serviceName: request.service || "", notes: "" }],
-        files:              [...request.files],
+        files:              isMockMode ? [...request.files] : [],
+        pendingFiles:       {},
         notes:              request.notes,
         status:             request.status,
         prepNotes:          request.serviceDetails.prepNotes          ?? "",
@@ -216,7 +283,7 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
     }
   }
 
-  // Fetch available service types from the server when the modal opens (Supabase mode only)
+  // Fetch available service types from server when modal opens (Supabase mode only)
   useEffect(() => {
     if (!isOpen || isMockMode) return
     listAvailableServiceTypes().then(setFetchedServiceTypes).catch(() => {})
@@ -228,6 +295,17 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
   const activeProducts  = products.filter((p) => p.status === "Active")
   const selectedProduct = activeProducts.find((p) => p.id === form.productId)
     ?? products.find((p) => p.id === form.productId)
+
+  // Already-uploaded files for this request (Supabase mode only, edit only)
+  const existingUploadedFiles = useMemo(
+    () =>
+      isEdit && !isMockMode && request
+        ? allFiles.filter(
+            (f) => f.relatedType === "service-request" && f.relatedId === request.id
+          )
+        : [],
+    [allFiles, isEdit, isMockMode, request]
+  )
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setFormState((f) => ({ ...f, [key]: value }))
@@ -263,12 +341,26 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
     }))
   }
 
-  /* ── Files ──────────────────────────────────────────────── */
-  function addFiles(newFiles: ServiceFile[]) {
-    setFormState((f) => ({ ...f, files: [...f.files, ...newFiles] }))
+  /* ── File management ─────────────────────────────────────── */
+  function addFiles(meta: ServiceFile[], raw: File[]) {
+    setFormState((f) => ({
+      ...f,
+      files: [...f.files, ...meta],
+      pendingFiles: {
+        ...f.pendingFiles,
+        ...Object.fromEntries(meta.map((m, i) => [m.id, raw[i]])),
+      },
+    }))
   }
+
   function removeFile(id: string) {
-    setFormState((f) => ({ ...f, files: f.files.filter((x) => x.id !== id) }))
+    const sf = form.files.find((f) => f.id === id)
+    if (sf?.localUrl) URL.revokeObjectURL(sf.localUrl)
+    setFormState((f) => {
+      const newPending = { ...f.pendingFiles }
+      delete newPending[id]
+      return { ...f, files: f.files.filter((x) => x.id !== id), pendingFiles: newPending }
+    })
   }
 
   /* ── Submit ─────────────────────────────────────────────── */
@@ -293,15 +385,15 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
     }
   }
 
-  const canEdit        = isAdmin || !isEdit || request?.status === "New"
+  const canEdit         = isAdmin || !isEdit || request?.status === "New"
   const showClientField = isAdmin && !isEdit && clients.length > 0
 
   /* ── Derived for service-specific fields ────────────────── */
   const selectedServiceNames = new Set(form.services.map((s) => s.serviceName).filter(Boolean))
-  const needsLabels  = selectedServiceNames.has("FBA Prep") || selectedServiceNames.has("Labeling")
-  const needsFBM     = selectedServiceNames.has("FBM Fulfillment")
+  const needsLabels   = selectedServiceNames.has("FBA Prep") || selectedServiceNames.has("Labeling")
+  const needsFBM      = selectedServiceNames.has("FBM Fulfillment")
   const needsBundling = selectedServiceNames.has("Bundling")
-  const needsOther   = selectedServiceNames.has("Other")
+  const needsOther    = selectedServiceNames.has("Other")
   const hasServiceFields = needsLabels || needsFBM || needsBundling || needsOther
 
   /* ── Price rows for estimate section ───────────────────── */
@@ -311,9 +403,11 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
       name:  s.serviceName,
       price: computeRowPrice(s.serviceName, s.serviceTypeId, effectiveQuantity, availServiceTypes),
     }))
-  const pricedCount    = pricedRows.filter((r) => r.price !== null).length
-  const totalEstimate  = pricedRows.reduce((sum, r) => sum + (r.price ?? 0), 0)
-  const showEstimate   = !isMockMode && effectiveQuantity > 0 && pricedCount > 0
+  const pricedCount   = pricedRows.filter((r) => r.price !== null).length
+  const totalEstimate = pricedRows.reduce((sum, r) => sum + (r.price ?? 0), 0)
+  const showEstimate  = !isMockMode && effectiveQuantity > 0 && pricedCount > 0
+
+  const totalFileCount = existingUploadedFiles.length + form.files.length
 
   return (
     <Modal
@@ -607,17 +701,39 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
 
         {/* Attachments */}
         <div>
-          <label className={labelClass}>Attachments</label>
-          <div className="flex items-start gap-3 flex-wrap">
-            {canEdit && <UploadBtn label="Add files" onAdd={addFiles} />}
-            {form.files.length === 0 && (
-              <p className="text-[12px] text-gray-400 italic py-1.5">No files attached</p>
+          <label className={labelClass}>
+            Attachments
+            {totalFileCount > 0 && (
+              <span className="ml-1.5 text-[10px] font-normal text-gray-400 normal-case tracking-normal">
+                ({totalFileCount} file{totalFileCount !== 1 ? "s" : ""})
+              </span>
             )}
-          </div>
-          {form.files.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-2">
-              {form.files.map((f) => <FileChip key={f.id} file={f} onRemove={removeFile} />)}
+          </label>
+
+          {/* Already-uploaded files (edit mode, Supabase) */}
+          {existingUploadedFiles.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {existingUploadedFiles.map((f) => (
+                <ExistingFileRow key={f.id} file={f} />
+              ))}
             </div>
+          )}
+
+          {/* Pending new files with preview */}
+          {form.files.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {form.files.map((f) => (
+                <FileCard key={f.id} file={f} onRemove={removeFile} />
+              ))}
+            </div>
+          )}
+
+          {/* Upload button */}
+          {canEdit && (
+            <UploadBtn label="Add files" onAdd={addFiles} />
+          )}
+          {totalFileCount === 0 && !canEdit && (
+            <p className="text-[12px] text-gray-400 italic">No files attached</p>
           )}
         </div>
 
@@ -638,7 +754,7 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
         {saveError && (
           <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5">
             <AlertCircle className="size-3.5 text-red-500 mt-0.5 shrink-0" />
-            <p className="text-[12px] text-red-600 leading-snug">{saveError}</p>
+            <p className="text-[12px] text-red-600 leading-snug whitespace-pre-wrap">{saveError}</p>
           </div>
         )}
 

@@ -25,6 +25,7 @@ import {
 } from "@/app/service-requests/actions"
 import { listProductClients } from "@/app/products/actions"
 import { createInvoice }      from "@/app/invoices/actions"
+import { uploadFile }         from "@/app/files/actions"
 import type { ServiceRequest, ServiceStatus, ServiceType, DataTableColumn, FileCategory, Invoice } from "@/lib/types"
 
 const PAGE_SIZE = 8
@@ -49,7 +50,7 @@ export default function ServiceRequestsPage() {
   const { requests, setRequests } = useRequests()
   const { setProducts } = useProducts()
   const { invoices, setInvoices } = useInvoices()
-  const { setFiles }              = useFiles()
+  const { files: allFiles, setFiles } = useFiles()
   const { clients }               = useClients()
 
   const [search,        setSearch]        = useState("")
@@ -106,6 +107,54 @@ export default function ServiceRequestsPage() {
   /* ── Helpers ─────────────────────────────────────────── */
   function openCreate() { setEditing(null);  setModalOpen(true) }
   function openEdit(r: ServiceRequest) { setEditing(r); setModalOpen(true) }
+
+  // Upload pending files to Supabase Storage and register them in the files context.
+  // Throws with a descriptive message if any upload fails (request is already saved by then).
+  async function uploadPendingFiles(
+    requestId: string,
+    clientId: string,
+    clientName: string,
+    category: FileCategory,
+    form: RequestFormData,
+  ) {
+    const entries = Object.entries(form.pendingFiles)
+    if (!entries.length) return
+
+    const failed: string[] = []
+    let bucketMissing = false
+
+    for (const [fileId, rawFile] of entries) {
+      const sf = form.files.find((f) => f.id === fileId)
+      const fd = new FormData()
+      fd.append("file",       rawFile)
+      fd.append("requestId",  requestId)
+      fd.append("clientId",   clientId)
+      fd.append("category",   category)
+      fd.append("uploadedBy", clientName)
+      try {
+        const doc = await uploadFile(fd)
+        setFiles((prev) => [doc, ...prev])
+      } catch (err) {
+        const msg = err instanceof Error ? err.message.toLowerCase() : ""
+        if (msg.includes("not found") || msg.includes("bucket") || msg.includes("does not exist")) {
+          bucketMissing = true
+          break
+        }
+        failed.push(sf?.name ?? rawFile.name)
+      }
+    }
+
+    if (bucketMissing) {
+      throw new Error(
+        "Request saved. Storage bucket 'files' does not exist — ask your admin to create it in Supabase."
+      )
+    }
+    if (failed.length) {
+      throw new Error(
+        `Request saved. Failed to upload: ${failed.join(", ")}.\nClick Cancel and re-attach them via Edit.`
+      )
+    }
+  }
 
   // Sync files to mock Files context (mock-only; not connected to Supabase yet)
   function syncFilesToContext(
@@ -334,6 +383,12 @@ export default function ServiceRequestsPage() {
           console.error("[ServiceRequests] Invoice creation failed:", err)
         }
       }
+
+      // Upload any newly attached files
+      await uploadPendingFiles(
+        editing.id, editing.clientId, editing.clientName,
+        fileCategory(primaryServiceName), form,
+      )
     } else {
       const created = await createRequest({
         clientId:  form.clientId || undefined,
@@ -347,6 +402,12 @@ export default function ServiceRequestsPage() {
       setRequests((prev) => [created, ...prev])
       setProducts((prev) => prev.map((p) => p.id === form.productId
         ? { ...p, available: Math.max(0, p.available - form.quantity) } : p))
+
+      // Upload any attached files (request must exist first to get its ID)
+      await uploadPendingFiles(
+        created.id, created.clientId, created.clientName,
+        fileCategory(primaryServiceName), form,
+      )
     }
 
     setModalOpen(false)
@@ -437,15 +498,21 @@ export default function ServiceRequestsPage() {
       header: "Files",
       headerClassName: "text-center",
       className: "text-center",
-      cell: (row) =>
-        row.files.length === 0 ? (
+      cell: (row) => {
+        const count = isMockMode
+          ? row.files.length
+          : allFiles.filter(
+              (f) => f.relatedType === "service-request" && f.relatedId === row.id
+            ).length
+        return count === 0 ? (
           <span className="text-[12px] text-gray-300">—</span>
         ) : (
           <div className="flex items-center justify-center gap-1">
             <FileText className="size-3.5 text-gray-400" />
-            <span className="text-[12px] font-semibold text-gray-600">{row.files.length}</span>
+            <span className="text-[12px] font-semibold text-gray-600">{count}</span>
           </div>
-        ),
+        )
+      },
     },
     {
       id: "created",

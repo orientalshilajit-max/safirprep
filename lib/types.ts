@@ -124,6 +124,8 @@ export type ServiceFile = {
   name: string
   type: string
   size: string
+  /** Ephemeral blob URL for in-modal image preview only. Never persisted. */
+  localUrl?: string
 }
 
 export type ServiceDetails = {
