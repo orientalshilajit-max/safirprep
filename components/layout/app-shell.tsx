@@ -19,6 +19,7 @@ import { listRequests }  from "@/app/service-requests/actions"
 import { listFiles }     from "@/app/files/actions"
 import { listInvoices }       from "@/app/invoices/actions"
 import { listClients, activateClientLogin } from "@/app/clients/actions"
+import { fetchPublicCompanyBranding } from "@/app/settings/actions"
 
 // ── Context type ──────────────────────────────────────────────
 
@@ -41,6 +42,8 @@ type AppContextType = {
   setClients: React.Dispatch<React.SetStateAction<Client[]>>
   refreshAll: () => Promise<void>
   isRefreshing: boolean
+  companyName: string
+  companyLogoUrl: string | null
 }
 
 const AppContext = createContext<AppContextType>({
@@ -62,6 +65,8 @@ const AppContext = createContext<AppContextType>({
   setClients: () => {},
   refreshAll: async () => {},
   isRefreshing: false,
+  companyName: "Safir Logistics",
+  companyLogoUrl: null,
 })
 
 // ── Hooks ─────────────────────────────────────────────────────
@@ -132,13 +137,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // ── Data state ───────────────────────────────────────────────
   // In mock mode: pre-populated with mock data.
   // In Supabase mode: starts empty; filled after auth resolves.
-  const [products,    setProducts]    = useState<Product[]>(isMockMode ? mockProducts : [])
-  const [shipments,   setShipments]   = useState<Shipment[]>(isMockMode ? mockShipments : [])
-  const [requests,    setRequests]    = useState<ServiceRequest[]>(isMockMode ? mockRequests : [])
-  const [files,       setFiles]       = useState<FileDoc[]>(isMockMode ? mockFiles : [])
-  const [invoices,    setInvoices]    = useState<Invoice[]>(isMockMode ? mockInvoices : [])
-  const [clients,     setClients]     = useState<Client[]>(isMockMode ? mockClients : [])
-  const [isRefreshing, setIsRefreshing] = useState(false)
+  const [products,      setProducts]      = useState<Product[]>(isMockMode ? mockProducts : [])
+  const [shipments,     setShipments]     = useState<Shipment[]>(isMockMode ? mockShipments : [])
+  const [requests,      setRequests]      = useState<ServiceRequest[]>(isMockMode ? mockRequests : [])
+  const [files,         setFiles]         = useState<FileDoc[]>(isMockMode ? mockFiles : [])
+  const [invoices,      setInvoices]      = useState<Invoice[]>(isMockMode ? mockInvoices : [])
+  const [clients,       setClients]       = useState<Client[]>(isMockMode ? mockClients : [])
+  const [isRefreshing,  setIsRefreshing]  = useState(false)
+  const [companyName,   setCompanyName]   = useState("Safir Logistics")
+  const [companyLogoUrl, setCompanyLogoUrl] = useState<string | null>(null)
   // Track whether auth has resolved so refreshAll knows it can fetch
   const authedRef = useRef(false)
 
@@ -153,7 +160,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     console.log("[DataSource] Refreshing all data from Supabase…")
     setIsRefreshing(true)
     try {
-      const [productsData, shipmentsData, requestsData, filesData, invoicesData, clientsData] =
+      const [productsData, shipmentsData, requestsData, filesData, invoicesData, clientsData, brandingData] =
         await Promise.all([
           listProducts(),
           listShipments(),
@@ -161,6 +168,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           listFiles(),
           listInvoices(),
           listClients(),
+          fetchPublicCompanyBranding(),
         ])
       setProducts(productsData)
       setShipments(shipmentsData)
@@ -168,14 +176,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setFiles(filesData)
       setInvoices(invoicesData)
       setClients(clientsData)
-      console.log("[DataSource] Refresh complete. Counts:", {
-        products: productsData.length,
-        shipments: shipmentsData.length,
-        requests: requestsData.length,
-        files: filesData.length,
-        invoices: invoicesData.length,
-        clients: clientsData.length,
-      })
+      setCompanyName(brandingData.companyName)
+      setCompanyLogoUrl(brandingData.logoUrl)
+      console.log("[DataSource] Refresh complete. Source: Supabase")
     } catch (err) {
       console.error("[DataSource] Refresh failed:", err)
     } finally {
@@ -222,7 +225,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
         try {
           console.log("[DataSource] Loading all data from Supabase…")
-          const [productsData, shipmentsData, requestsData, filesData, invoicesData, clientsData] =
+          const [productsData, shipmentsData, requestsData, filesData, invoicesData, clientsData, brandingData] =
             await Promise.all([
               listProducts(),
               listShipments(),
@@ -230,6 +233,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               listFiles(),
               listInvoices(),
               listClients(),
+              fetchPublicCompanyBranding(),
             ])
           setProducts(productsData)
           setShipments(shipmentsData)
@@ -237,6 +241,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           setFiles(filesData)
           setInvoices(invoicesData)
           setClients(clientsData)
+          setCompanyName(brandingData.companyName)
+          setCompanyLogoUrl(brandingData.logoUrl)
           authedRef.current = true
           console.log("[DataSource] Initial load complete. Source: Supabase")
         } catch {
@@ -303,6 +309,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         clients,   setClients,
         refreshAll,
         isRefreshing,
+        companyName,
+        companyLogoUrl,
       }}
     >
       <div className="flex h-screen bg-slate-50 overflow-hidden">
@@ -310,6 +318,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           role={role}
           isOpen={sidebarOpen}
           onClose={() => setSidebarOpen(false)}
+          companyName={companyName}
+          companyLogoUrl={companyLogoUrl}
         />
         <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
           <Header

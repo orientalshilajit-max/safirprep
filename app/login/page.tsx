@@ -1,9 +1,10 @@
 "use client"
 
-import { useState, Suspense } from "react"
+import { useState, useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { Box, Eye, EyeOff, AlertCircle } from "lucide-react"
 import { isSupabaseConfigured, createBrowserClient } from "@/lib/supabase"
+import { fetchPublicCompanyBranding } from "@/app/settings/actions"
 
 // useSearchParams() must be inside a Suspense boundary during SSR
 function LoginForm() {
@@ -16,6 +17,15 @@ function LoginForm() {
   const [showPassword, setShowPassword] = useState(false)
   const [loading,      setLoading]      = useState(false)
   const [error,        setError]        = useState<string | null>(null)
+  const [branding, setBranding] = useState<{ companyName: string; logoUrl: string | null }>({
+    companyName: "Safir Logistics",
+    logoUrl: null,
+  })
+
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return
+    fetchPublicCompanyBranding().then(setBranding).catch(() => {})
+  }, [])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -84,11 +94,20 @@ function LoginForm() {
 
         {/* Brand */}
         <div className="flex items-center justify-center gap-3 mb-9">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-blue-600">
-            <Box className="size-5 text-white" />
+          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 overflow-hidden">
+            {branding.logoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={branding.logoUrl}
+                alt={branding.companyName}
+                className="size-full object-contain"
+              />
+            ) : (
+              <Box className="size-5 text-white" />
+            )}
           </div>
           <div>
-            <p className="text-[19px] font-bold text-white leading-tight">Safir WMS</p>
+            <p className="text-[19px] font-bold text-white leading-tight">{branding.companyName}</p>
             <p className="text-[12px] text-slate-400 leading-tight mt-0.5">
               Prep Center Portal
             </p>

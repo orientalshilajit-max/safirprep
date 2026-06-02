@@ -42,11 +42,15 @@ type SidebarProps = {
   role: UserRole
   isOpen: boolean
   onClose: () => void
+  companyName?: string
+  companyLogoUrl?: string | null
 }
 
-export function Sidebar({ role, isOpen, onClose }: SidebarProps) {
+export function Sidebar({ role, isOpen, onClose, companyName, companyLogoUrl }: SidebarProps) {
   const pathname = usePathname()
   const nav = role === "admin" ? adminNav : clientNav
+
+  const displayName = companyName || "Your Company"
 
   return (
     <>
@@ -73,12 +77,22 @@ export function Sidebar({ role, isOpen, onClose }: SidebarProps) {
       >
         {/* Brand */}
         <div className="flex items-center gap-3 px-4 py-[18px] border-b border-slate-800 shrink-0">
-          <div className="flex size-9 items-center justify-center rounded-lg bg-blue-600 shrink-0">
-            <Box className="size-[18px] text-white" />
+          {/* Logo or fallback icon */}
+          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-blue-600 overflow-hidden">
+            {companyLogoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={companyLogoUrl}
+                alt={displayName}
+                className="size-full object-contain"
+              />
+            ) : (
+              <Box className="size-[18px] text-white" />
+            )}
           </div>
           <div className="min-w-0 flex-1">
             <p className="text-[13px] font-semibold text-white leading-tight truncate">
-              Your Company
+              {displayName}
             </p>
             <p className="text-[11px] text-slate-400 leading-tight mt-0.5">
               {role === "admin" ? "Admin Portal" : "Client Portal"}

@@ -14,6 +14,7 @@ import {
   fetchSettings,
   saveCompanyInfo,
   uploadLogo,
+  saveLogoUrl,
   upsertCarrier,
   deleteCarrier,
   checkCarrierUsage,
@@ -1058,6 +1059,8 @@ export default function SettingsPage() {
       const fd = new FormData()
       fd.set("file", file)
       const url = await uploadLogo(fd)
+      // Persist the new logo URL to the DB immediately — no Save Changes click needed
+      await saveLogoUrl(url)
       setCompany((c) => ({ ...c, logoUrl: url }))
       setLogoPreview(url)
     } catch (err) {
@@ -1147,8 +1150,9 @@ export default function SettingsPage() {
           <div className="space-y-4">
             {/* Logo */}
             <Field label="Logo">
-              <div className="flex items-center gap-4">
-                <div className="flex size-16 items-center justify-center rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 shrink-0 overflow-hidden">
+              <div className="flex items-start gap-4">
+                {/* Preview box */}
+                <div className="flex size-16 shrink-0 items-center justify-center rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 overflow-hidden">
                   {logoPreview ? (
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={logoPreview} alt="Company logo" className="size-full object-contain p-1" />
@@ -1156,21 +1160,50 @@ export default function SettingsPage() {
                     <ImagePlus className="size-6 text-gray-300" />
                   )}
                 </div>
-                <div>
-                  <button
-                    type="button"
-                    onClick={() => logoFileRef.current?.click()}
-                    disabled={logoUploading}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
-                  >
-                    <Plus className="size-3.5" />
-                    {logoUploading ? "Uploading…" : "Upload Logo"}
-                  </button>
-                  <p className="mt-1 text-[11px] text-gray-400">JPG, PNG, WebP, or SVG — max 5 MB</p>
+
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => logoFileRef.current?.click()}
+                      disabled={logoUploading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                    >
+                      <Plus className="size-3.5" />
+                      {logoUploading ? "Uploading…" : logoPreview ? "Replace Logo" : "Upload Logo"}
+                    </button>
+                    {logoPreview && !logoUploading && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setLogoPreview(null)
+                          setCompany((c) => ({ ...c, logoUrl: null }))
+                          if (!isMockMode) {
+                            try { await saveLogoUrl("") } catch { /* best-effort */ }
+                          }
+                        }}
+                        className="flex items-center gap-1 px-2 py-1.5 text-[12px] text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <X className="size-3.5" />
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-gray-400">JPG, PNG, WebP, or SVG — max 5 MB</p>
+                  {logoUploading && (
+                    <p className="text-[11px] text-blue-600">Uploading and saving…</p>
+                  )}
+                  {!logoUploading && logoPreview && company.logoUrl && (
+                    <p className="text-[11px] text-green-600">Logo saved — visible in sidebar and login.</p>
+                  )}
                   {logoError && (
-                    <p className="mt-1 text-[11px] text-red-500">{logoError}</p>
+                    <div className="flex items-start gap-1.5 rounded-lg border border-red-100 bg-red-50 px-2.5 py-2 max-w-xs">
+                      <AlertCircle className="size-3.5 text-red-500 mt-0.5 shrink-0" />
+                      <p className="text-[11px] text-red-600 leading-snug">{logoError}</p>
+                    </div>
                   )}
                 </div>
+
                 <input
                   ref={logoFileRef}
                   type="file"

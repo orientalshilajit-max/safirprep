@@ -240,6 +240,59 @@ export async function uploadLogo(formData: FormData): Promise<string> {
   return publicUrl
 }
 
+// ── Save logo URL only (called immediately after upload) ──────
+
+export async function saveLogoUrl(url: string): Promise<void> {
+  await requireAdmin()
+  const admin = createServerAdminClient()
+
+  const { data: existing } = await admin
+    .from("company_settings")
+    .select("id")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (existing?.id) {
+    const { error } = await admin
+      .from("company_settings")
+      .update({ logo_url: url })
+      .eq("id", existing.id)
+    if (error) throw new Error(error.message)
+  } else {
+    const { error } = await admin
+      .from("company_settings")
+      .insert({ logo_url: url })
+    if (error) throw new Error(error.message)
+  }
+
+  revalidatePath("/settings")
+}
+
+// ── Public company branding (no auth — for sidebar + login) ───
+
+export async function fetchPublicCompanyBranding(): Promise<{
+  companyName: string
+  logoUrl: string | null
+}> {
+  try {
+    const admin = createServerAdminClient()
+    const { data } = await admin
+      .from("company_settings")
+      .select("company_name, logo_url")
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    return {
+      companyName: data?.company_name ?? "Safir Logistics",
+      logoUrl:     data?.logo_url    ?? null,
+    }
+  } catch {
+    return { companyName: "Safir Logistics", logoUrl: null }
+  }
+}
+
 // ── Carriers ──────────────────────────────────────────────────
 
 export async function upsertCarrier(data: {
