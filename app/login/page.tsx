@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react"
 import { useRouter, useSearchParams } from "next/navigation"
-import { Box, Eye, EyeOff, AlertCircle } from "lucide-react"
+import { Eye, EyeOff, AlertCircle } from "lucide-react"
 import { isSupabaseConfigured, createBrowserClient } from "@/lib/supabase"
 import { fetchPublicCompanyBranding } from "@/app/settings/actions"
 
@@ -93,25 +93,17 @@ function LoginForm() {
       <div className="w-full max-w-[360px]">
 
         {/* Brand */}
-        <div className="flex items-center justify-center gap-3 mb-9">
-          <div className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-blue-600 overflow-hidden">
-            {branding.logoUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={branding.logoUrl}
-                alt={branding.companyName}
-                className="size-full object-contain"
-              />
-            ) : (
-              <Box className="size-5 text-white" />
-            )}
-          </div>
-          <div>
-            <p className="text-[19px] font-bold text-white leading-tight">{branding.companyName}</p>
-            <p className="text-[12px] text-slate-400 leading-tight mt-0.5">
-              Portal
-            </p>
-          </div>
+        <div className="flex justify-center mb-9">
+          {branding.logoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={branding.logoUrl}
+              alt={branding.companyName}
+              className="max-h-[70px] md:max-h-[90px] w-auto object-contain"
+            />
+          ) : (
+            <p className="text-[22px] font-bold text-white leading-tight">{branding.companyName}</p>
+          )}
         </div>
 
         {/* Card */}
