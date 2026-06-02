@@ -25,6 +25,7 @@ import {
   deleteClientPermanently,
   sendInvite,
   resetPassword,
+  listClients,
 } from "@/app/clients/actions"
 import type { Client, ClientStatus, DataTableColumn } from "@/lib/types"
 
@@ -170,12 +171,11 @@ export default function ClientsPage() {
     }
 
     if (editing) {
-      const updated = await updateClient(editing.id, data)
-      setClients((prev) => prev.map((c) => c.id === editing.id ? updated : c))
+      await updateClient(editing.id, data)
     } else {
-      const created = await createClient(data)
-      setClients((prev) => [created, ...prev])
+      await createClient(data)
     }
+    setClients(await listClients())
     setModalOpen(false)
   }
 
@@ -188,7 +188,7 @@ export default function ClientsPage() {
     }
     try {
       await archiveClient(c.id)
-      setClients((prev) => prev.filter((x) => x.id !== c.id))
+      setClients(await listClients())
       setArchivedLoaded(false)
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to archive client.")
@@ -203,9 +203,9 @@ export default function ClientsPage() {
       return
     }
     try {
-      const restored = await restoreClient(c.id)
+      await restoreClient(c.id)
       setArchivedClients((prev) => prev.filter((x) => x.id !== c.id))
-      setClients((prev) => [restored, ...prev])
+      setClients(await listClients())
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to restore client.")
     }
@@ -221,6 +221,7 @@ export default function ClientsPage() {
     try {
       await deleteClientPermanently(c.id)
       setArchivedClients((prev) => prev.filter((x) => x.id !== c.id))
+      setClients(await listClients())
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to delete client.")
     }
@@ -248,8 +249,8 @@ export default function ClientsPage() {
       return
     }
     try {
-      const updated = await sendInvite(c.id)
-      setClients((prev) => prev.map((x) => x.id === c.id ? updated : x))
+      await sendInvite(c.id)
+      setClients(await listClients())
       setInviteSent(c.id)
       setTimeout(() => setInviteSent(null), 2500)
     } catch (err) {

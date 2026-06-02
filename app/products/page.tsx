@@ -22,6 +22,7 @@ import {
   restoreProduct,
   deleteProductPermanently,
   listProductClients,
+  listProducts,
 } from "@/app/products/actions"
 import type { Product, DataTableColumn } from "@/lib/types"
 
@@ -106,12 +107,11 @@ export default function ProductsPage() {
     }
 
     if (editing) {
-      const updated = await updateProduct(editing.id, data)
-      setProducts((ps) => ps.map((p) => (p.id === editing.id ? updated : p)))
+      await updateProduct(editing.id, data)
     } else {
-      const created = await createProduct(data)
-      setProducts((ps) => [created, ...ps])
+      await createProduct(data)
     }
+    setProducts(await listProducts())
     setModalOpen(false)
   }
 
@@ -124,7 +124,7 @@ export default function ProductsPage() {
     }
     try {
       await archiveProduct(id)
-      setProducts((ps) => ps.map((p) => (p.id === id ? { ...p, status: "Archived" as const } : p)))
+      setProducts(await listProducts())
       flash("success", "Product archived successfully.")
     } catch (err) {
       flash("error", err instanceof Error ? err.message : "Failed to archive product.")
@@ -140,7 +140,7 @@ export default function ProductsPage() {
     }
     try {
       await restoreProduct(id)
-      setProducts((ps) => ps.map((p) => (p.id === id ? { ...p, status: "Active" as const } : p)))
+      setProducts(await listProducts())
       flash("success", "Product restored successfully.")
     } catch (err) {
       flash("error", err instanceof Error ? err.message : "Failed to restore product.")
@@ -160,7 +160,7 @@ export default function ProductsPage() {
     }
     const result = await deleteProductPermanently(id)
     if (result.success) {
-      setProducts((ps) => ps.filter((p) => p.id !== id))
+      setProducts(await listProducts())
       flash("success", "Product deleted permanently.")
     } else {
       flash("error", result.error)

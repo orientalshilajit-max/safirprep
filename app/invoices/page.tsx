@@ -14,7 +14,7 @@ import {
   ChevronRight,
 } from "lucide-react"
 import { useRole, useInvoices, useAuthUser, useIsMockMode } from "@/components/layout/app-shell"
-import { updateInvoice } from "@/app/invoices/actions"
+import { updateInvoice, listInvoices } from "@/app/invoices/actions"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { IconButton } from "@/components/ui/icon-button"
@@ -98,7 +98,10 @@ export default function InvoicesPage() {
       notes:     updated.notes,
       lineItems: updated.lineItems,
     })
-    setInvoices((prev) => prev.map((inv) => inv.id === saved.id ? saved : inv))
+    // Re-fetch to pick up any cross-device changes made since last load
+    const fresh = await listInvoices().catch(() => null)
+    if (fresh) setInvoices(fresh)
+    else setInvoices((prev) => prev.map((inv) => inv.id === saved.id ? saved : inv))
     setViewing(saved)
   }
 

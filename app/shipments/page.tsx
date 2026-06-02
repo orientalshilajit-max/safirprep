@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useMemo, useEffect } from "react"
-import { useRouter } from "next/navigation"
 import {
   Search, Plus, Pencil, Archive, Trash2,
   Truck, PackageCheck, PackageOpen, AlertTriangle, AlertCircle,
@@ -23,9 +22,9 @@ import {
   permanentDeleteShipment,
   listArchivedShipments,
   updateShipment,
+  listShipments,
 } from "@/app/shipments/actions"
-import { listProductClients } from "@/app/products/actions"
-import { listProducts }       from "@/app/products/actions"
+import { listProductClients, listProducts } from "@/app/products/actions"
 import type { Shipment, ShipmentStatus, DataTableColumn } from "@/lib/types"
 
 const PAGE_SIZE = 8
@@ -41,7 +40,6 @@ const ALL_STATUSES: ShipmentStatus[] = [
 ]
 
 export default function ShipmentsPage() {
-  const router     = useRouter()
   const { role }   = useRole()
   const isMockMode = useIsMockMode()
   const { shipments, setShipments } = useShipments()
@@ -165,28 +163,36 @@ export default function ShipmentsPage() {
   const paginatedArchived  = filteredArchived.slice((safeArchivedPage - 1) * PAGE_SIZE, safeArchivedPage * PAGE_SIZE)
 
   /* ── Shipment list actions ───────────────────────────── */
-  function handleCreate(shipment: Shipment) {
-    setShipments((prev) => [shipment, ...prev])
-    setProducts((prev) =>
-      prev.map((p) => {
-        const sp = shipment.products.find((x) => x.productId === p.id)
-        return sp ? { ...p, incoming: p.incoming + sp.units } : p
-      })
-    )
+  async function handleCreate(shipment: Shipment) {
+    // Re-fetch both shipments and products so inventory is in sync
+    try {
+      const [freshShipments, freshProducts] = await Promise.all([listShipments(), listProducts()])
+      setShipments(freshShipments)
+      setProducts(freshProducts)
+    } catch {
+      // Fall back to optimistic update if re-fetch fails
+      setShipments((prev) => [shipment, ...prev])
+      setProducts((prev) =>
+        prev.map((p) => {
+          const sp = shipment.products.find((x) => x.productId === p.id)
+          return sp ? { ...p, incoming: p.incoming + sp.units } : p
+        })
+      )
+    }
     setCreateOpen(false)
   }
 
   async function handleEditSave(updated: Shipment) {
-    setShipments((prev) => prev.map((s) => s.id === updated.id ? updated : s))
-    // Refresh products if inventory sync happened (received/partially received)
-    if (updated.isInventoryUpdated && !isMockMode) {
+    if (!isMockMode) {
       try {
-        const fresh = await listProducts()
-        setProducts(fresh)
+        const [freshShipments, freshProducts] = await Promise.all([listShipments(), listProducts()])
+        setShipments(freshShipments)
+        setProducts(freshProducts)
       } catch {
-        // leave product state as-is
+        setShipments((prev) => prev.map((s) => s.id === updated.id ? updated : s))
       }
-      router.refresh()
+    } else {
+      setShipments((prev) => prev.map((s) => s.id === updated.id ? updated : s))
     }
     setEditTarget(null)
   }
@@ -202,7 +208,7 @@ export default function ShipmentsPage() {
     setArchiving(true)
     try {
       await archiveShipment(id)
-      setShipments((prev) => prev.filter((s) => s.id !== id))
+      setShipments(await listShipments())
       setArchiveTarget(null)
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to archive shipment.")
@@ -222,11 +228,8 @@ export default function ShipmentsPage() {
     setRestoring(true)
     try {
       await restoreShipment(id)
-      const restored = archivedShipments.find((s) => s.id === id)
-      if (restored) {
-        setArchivedShipments((prev) => prev.filter((s) => s.id !== id))
-        setShipments((prev) => [{ ...restored, isArchived: false, archivedAt: undefined }, ...prev])
-      }
+      setArchivedShipments((prev) => prev.filter((s) => s.id !== id))
+      setShipments(await listShipments())
       setRestoreTarget(null)
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to restore shipment.")
@@ -257,6 +260,7 @@ export default function ShipmentsPage() {
     } finally {
       setPermDeleting(false)
     }
+    // No re-fetch needed for perm delete of archived — archived list is local-only
   }
 
   /* ── Status badge click / dropdown ──────────────────── */
@@ -295,7 +299,7 @@ export default function ShipmentsPage() {
       return
     }
     try {
-      const updated = await updateShipment(shipment.id, {
+      await updateShipment(shipment.id, {
         status:   newStatus,
         notes:    shipment.notes,
         products: shipment.products.map((sp) => ({
@@ -312,7 +316,7 @@ export default function ShipmentsPage() {
           notes:          t.notes,
         })),
       })
-      setShipments((prev) => prev.map((s) => (s.id === shipment.id ? updated : s)))
+      setShipments(await listShipments())
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to update status.")
     }
@@ -378,12 +382,12 @@ export default function ShipmentsPage() {
         })),
       })
 
-      setShipments((prev) => prev.map((s) => (s.id === receivingTarget.id ? updated : s)))
-
       try {
-        const fresh = await listProducts()
-        setProducts(fresh)
+        const [freshShipments, freshProducts] = await Promise.all([listShipments(), listProducts()])
+        setShipments(freshShipments)
+        setProducts(freshProducts)
       } catch {
+        setShipments((prev) => prev.map((s) => (s.id === receivingTarget.id ? updated : s)))
         setProducts((prev) =>
           prev.map((p) => {
             const r = results.find((x) => x.productId === p.id)
@@ -398,7 +402,6 @@ export default function ShipmentsPage() {
         )
       }
 
-      router.refresh()
       setReceivingTarget(null)
     } catch (err) {
       setReceivingError(err instanceof Error ? err.message : "Failed to record receiving.")

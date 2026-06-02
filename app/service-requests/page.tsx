@@ -24,9 +24,10 @@ import {
   updateRequest,
   updateRequestStatus,
   archiveRequest,
+  listRequests,
 } from "@/app/service-requests/actions"
-import { listProductClients } from "@/app/products/actions"
-import { createInvoice }      from "@/app/invoices/actions"
+import { listProductClients, listProducts } from "@/app/products/actions"
+import { createInvoice, listInvoices } from "@/app/invoices/actions"
 import { uploadFile }         from "@/app/files/actions"
 import type { ServiceRequest, ServiceStatus, ServiceType, DataTableColumn, FileCategory, Invoice } from "@/lib/types"
 
@@ -382,28 +383,13 @@ export default function ServiceRequestsPage() {
         serviceDetails,
       })
 
-      setRequests((prev) => prev.map((r) => r.id === editing.id ? updated : r))
-
-      // Mirror inventory change in products context for immediate UI feedback
-      const becomingCancelled = form.status === "Cancelled" && editing.status !== "Cancelled"
-      if (editing.inventoryDeducted) {
-        if (becomingCancelled) {
-          setProducts((prev) => prev.map((p) => p.id === editing.productId
-            ? { ...p, available: p.available + editing.quantity } : p))
-        } else if (form.status !== "Cancelled") {
-          if (editing.productId !== form.productId) {
-            setProducts((prev) => prev.map((p) => {
-              if (p.id === editing.productId) return { ...p, available: p.available + editing.quantity }
-              if (p.id === form.productId)    return { ...p, available: Math.max(0, p.available - form.quantity) }
-              return p
-            }))
-          } else if (editing.quantity !== form.quantity) {
-            const delta = editing.quantity - form.quantity
-            setProducts((prev) => prev.map((p) => p.id === form.productId
-              ? { ...p, available: Math.max(0, p.available + delta) } : p))
-          }
-        }
-      }
+      // Re-fetch requests and products from Supabase for cross-device consistency
+      const [freshRequests, freshProducts] = await Promise.all([
+        listRequests(),
+        listProducts(),
+      ]).catch(() => [null, null])
+      if (freshRequests) setRequests(freshRequests)
+      if (freshProducts) setProducts(freshProducts)
 
       // Auto-create invoice when admin marks request as Invoiced (Supabase mode)
       const becomingInvoiced = form.status === "Invoiced" && editing.status !== "Invoiced"
@@ -413,7 +399,7 @@ export default function ServiceRequestsPage() {
           const unitPrice = SERVICE_UNIT_PRICES[primaryServiceName] ?? 1.00
           const dueDate   = new Date(Date.now() + 14 * 86_400_000)
             .toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-          const newInvoice = await createInvoice({
+          await createInvoice({
             clientId:  editing.clientId,
             requestId: editing.id,
             lineItems: [{
@@ -424,7 +410,7 @@ export default function ServiceRequestsPage() {
             dueDate,
             notes: "",
           })
-          setInvoices((prev) => [newInvoice, ...prev])
+          void listInvoices().then(setInvoices).catch(() => {})
         } catch (err) {
           // Invoice creation is best-effort; don't block the request save
           console.error("[ServiceRequests] Invoice creation failed:", err)
@@ -455,8 +441,15 @@ export default function ServiceRequestsPage() {
         serviceDetails,
       })
 
-      setRequests((prev) => [created, ...prev])
-      setProducts((prev) => prev.map((p) => p.id === form.productId
+      // Re-fetch requests and products from Supabase for cross-device consistency
+      const [freshRequests2, freshProducts2] = await Promise.all([
+        listRequests(),
+        listProducts(),
+      ]).catch(() => [null, null])
+      if (freshRequests2) setRequests(freshRequests2)
+      else setRequests((prev) => [created, ...prev])
+      if (freshProducts2) setProducts(freshProducts2)
+      else setProducts((prev) => prev.map((p) => p.id === form.productId
         ? { ...p, available: Math.max(0, p.available - form.quantity) } : p))
 
       // Upload any attached files (request must exist first to get its ID)
@@ -491,11 +484,13 @@ export default function ServiceRequestsPage() {
 
     try {
       await archiveRequest(r.id)
-      setRequests((prev) => prev.filter((x) => x.id !== r.id))
-      // Restore inventory locally if request was still "New"
-      if (r.status === "New" && r.inventoryDeducted) {
-        setProducts((prev) => prev.map((p) => p.id === r.productId ? { ...p, available: p.available + r.quantity } : p))
-      }
+      const [freshRequests, freshProducts] = await Promise.all([
+        listRequests(),
+        listProducts(),
+      ]).catch(() => [null, null])
+      if (freshRequests) setRequests(freshRequests)
+      else setRequests((prev) => prev.filter((x) => x.id !== r.id))
+      if (freshProducts) setProducts(freshProducts)
     } catch (err) {
       console.error("[ServiceRequestsPage] archiveRequest failed:", err)
     }
@@ -537,14 +532,7 @@ export default function ServiceRequestsPage() {
 
     // Supabase mode
     try {
-      const updated = await updateRequestStatus(request.id, newStatus)
-      setRequests((prev) => prev.map((r) => r.id === request.id ? updated : r))
-
-      if (newStatus === "Cancelled" && request.inventoryDeducted) {
-        setProducts((prev) => prev.map((p) =>
-          p.id === request.productId ? { ...p, available: p.available + request.quantity } : p
-        ))
-      }
+      await updateRequestStatus(request.id, newStatus)
 
       if (role === "admin" && newStatus === "Invoiced" && request.status !== "Invoiced") {
         const alreadyHasInvoice = invoices.some((inv) => inv.relatedRequestNumber === request.requestNumber)
@@ -554,20 +542,28 @@ export default function ServiceRequestsPage() {
             const dueDateObj = new Date()
             dueDateObj.setDate(dueDateObj.getDate() + 14)
             const dueDate = dueDateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-            const newInvoice = await createInvoice({
+            await createInvoice({
               clientId:  request.clientId,
               requestId: request.id,
               lineItems: [{ description: `${request.service} – ${request.productName} (${request.quantity} units)`, quantity: request.quantity, unitPrice }],
               dueDate,
               notes: "",
             })
-            setInvoices((prev) => [newInvoice, ...prev])
           } catch {
             flashMsg("Status updated. Invoice creation failed — create it manually.", true)
-            return
           }
         }
       }
+
+      // Re-fetch all affected data for cross-device consistency
+      const [freshRequests, freshProducts, freshInvoices] = await Promise.all([
+        listRequests(),
+        listProducts(),
+        listInvoices(),
+      ]).catch(() => [null, null, null])
+      if (freshRequests) setRequests(freshRequests)
+      if (freshProducts) setProducts(freshProducts)
+      if (freshInvoices) setInvoices(freshInvoices)
     } catch (err) {
       flashMsg(err instanceof Error ? err.message : "Failed to update status.", true)
     }

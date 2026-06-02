@@ -1,6 +1,6 @@
 "use client"
 
-import { Bell, LogOut } from "lucide-react"
+import { Bell, LogOut, RefreshCw } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { UserRole } from "@/lib/types"
 import type { AuthUser } from "@/lib/auth"
@@ -11,9 +11,11 @@ type HeaderProps = {
   authUser: AuthUser | null
   isMockMode: boolean
   onLogout: () => void
+  onRefresh?: () => void
+  isRefreshing?: boolean
 }
 
-export function Header({ role, setRole, authUser, isMockMode, onLogout }: HeaderProps) {
+export function Header({ role, setRole, authUser, isMockMode, onLogout, onRefresh, isRefreshing }: HeaderProps) {
   // Display name and initials: real user when authed, mock fallback in dev
   const displayName = authUser?.displayName ?? "John Smith"
   const initials    = authUser?.initials    ?? "JS"
@@ -58,6 +60,18 @@ export function Header({ role, setRole, authUser, isMockMode, onLogout }: Header
               </button>
             ))}
           </div>
+        )}
+
+        {/* Refresh data (Supabase mode only) */}
+        {!isMockMode && onRefresh && (
+          <button
+            onClick={onRefresh}
+            disabled={isRefreshing}
+            title="Refresh data from server"
+            className="flex size-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <RefreshCw className={cn("size-[15px]", isRefreshing && "animate-spin")} />
+          </button>
         )}
 
         {/* Notifications */}

@@ -1,6 +1,6 @@
 "use client"
 
-import { createContext, useContext, useState, useEffect, useCallback } from "react"
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react"
 import { usePathname, useRouter } from "next/navigation"
 import { Sidebar } from "./sidebar"
 import { Header } from "./header"
@@ -39,6 +39,8 @@ type AppContextType = {
   setInvoices: React.Dispatch<React.SetStateAction<Invoice[]>>
   clients: Client[]
   setClients: React.Dispatch<React.SetStateAction<Client[]>>
+  refreshAll: () => Promise<void>
+  isRefreshing: boolean
 }
 
 const AppContext = createContext<AppContextType>({
@@ -58,6 +60,8 @@ const AppContext = createContext<AppContextType>({
   setInvoices: () => {},
   clients: [],
   setClients: () => {},
+  refreshAll: async () => {},
+  isRefreshing: false,
 })
 
 // ── Hooks ─────────────────────────────────────────────────────
@@ -105,6 +109,11 @@ export function useClients() {
   return { clients, setClients }
 }
 
+export function useRefreshAll() {
+  const { refreshAll, isRefreshing } = useContext(AppContext)
+  return { refreshAll, isRefreshing }
+}
+
 // ── AppShell ──────────────────────────────────────────────────
 
 export function AppShell({ children }: { children: React.ReactNode }) {
@@ -121,12 +130,73 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // ── Data state ───────────────────────────────────────────────
   // In mock mode: pre-populated with mock data.
   // In Supabase mode: starts empty; filled after auth resolves.
-  const [products,  setProducts]  = useState<Product[]>(isMockMode ? mockProducts : [])
-  const [shipments, setShipments] = useState<Shipment[]>(isMockMode ? mockShipments : [])
-  const [requests,  setRequests]  = useState<ServiceRequest[]>(isMockMode ? mockRequests : [])
-  const [files,     setFiles]     = useState<FileDoc[]>(isMockMode ? mockFiles : [])
-  const [invoices,  setInvoices]  = useState<Invoice[]>(isMockMode ? mockInvoices : [])
-  const [clients,   setClients]   = useState<Client[]>(isMockMode ? mockClients : [])
+  const [products,    setProducts]    = useState<Product[]>(isMockMode ? mockProducts : [])
+  const [shipments,   setShipments]   = useState<Shipment[]>(isMockMode ? mockShipments : [])
+  const [requests,    setRequests]    = useState<ServiceRequest[]>(isMockMode ? mockRequests : [])
+  const [files,       setFiles]       = useState<FileDoc[]>(isMockMode ? mockFiles : [])
+  const [invoices,    setInvoices]    = useState<Invoice[]>(isMockMode ? mockInvoices : [])
+  const [clients,     setClients]     = useState<Client[]>(isMockMode ? mockClients : [])
+  const [isRefreshing, setIsRefreshing] = useState(false)
+  // Track whether auth has resolved so refreshAll knows it can fetch
+  const authedRef = useRef(false)
+
+  // Debug: log data source on mount
+  useEffect(() => {
+    console.log("[DataSource] Mode:", isMockMode ? "mock" : "Supabase")
+  }, [isMockMode])
+
+  // ── Refresh all data from Supabase ───────────────────────────
+  const refreshAll = useCallback(async () => {
+    if (isMockMode || !authedRef.current) return
+    console.log("[DataSource] Refreshing all data from Supabase…")
+    setIsRefreshing(true)
+    try {
+      const [productsData, shipmentsData, requestsData, filesData, invoicesData, clientsData] =
+        await Promise.all([
+          listProducts(),
+          listShipments(),
+          listRequests(),
+          listFiles(),
+          listInvoices(),
+          listClients(),
+        ])
+      setProducts(productsData)
+      setShipments(shipmentsData)
+      setRequests(requestsData)
+      setFiles(filesData)
+      setInvoices(invoicesData)
+      setClients(clientsData)
+      console.log("[DataSource] Refresh complete. Counts:", {
+        products: productsData.length,
+        shipments: shipmentsData.length,
+        requests: requestsData.length,
+        files: filesData.length,
+        invoices: invoicesData.length,
+        clients: clientsData.length,
+      })
+    } catch (err) {
+      console.error("[DataSource] Refresh failed:", err)
+    } finally {
+      setIsRefreshing(false)
+    }
+  }, [isMockMode])
+
+  // Auto-refresh when the tab regains focus after 30+ seconds away
+  useEffect(() => {
+    if (isMockMode) return
+    let hiddenAt = 0
+    function onVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        hiddenAt = Date.now()
+      } else if (document.visibilityState === "visible" && hiddenAt > 0) {
+        if (Date.now() - hiddenAt >= 30_000) {
+          void refreshAll()
+        }
+      }
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange)
+    return () => document.removeEventListener("visibilitychange", onVisibilityChange)
+  }, [isMockMode, refreshAll])
 
   // ── Session initialisation ───────────────────────────────────
   useEffect(() => {
@@ -149,6 +219,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         }
 
         try {
+          console.log("[DataSource] Loading all data from Supabase…")
           const [productsData, shipmentsData, requestsData, filesData, invoicesData, clientsData] =
             await Promise.all([
               listProducts(),
@@ -164,6 +235,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           setFiles(filesData)
           setInvoices(invoicesData)
           setClients(clientsData)
+          authedRef.current = true
+          console.log("[DataSource] Initial load complete. Source: Supabase")
         } catch {
           // Leave data empty; pages will show their empty states.
         }
@@ -226,6 +299,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         files,     setFiles,
         invoices,  setInvoices,
         clients,   setClients,
+        refreshAll,
+        isRefreshing,
       }}
     >
       <div className="flex h-screen bg-slate-50 overflow-hidden">
@@ -237,6 +312,8 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             authUser={authUser}
             isMockMode={isMockMode}
             onLogout={handleLogout}
+            onRefresh={refreshAll}
+            isRefreshing={isRefreshing}
           />
           <main className="flex-1 overflow-y-auto p-6">
             {children}

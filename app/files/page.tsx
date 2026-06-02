@@ -31,6 +31,7 @@ import { IconButton } from "@/components/ui/icon-button"
 import { FilePreviewModal } from "@/components/files/file-preview-modal"
 import { UploadModal } from "@/components/files/upload-modal"
 import { listProductClients } from "@/app/products/actions"
+import { listFiles } from "@/app/files/actions"
 import type { FileDoc, FileCategory, DataTableColumn } from "@/lib/types"
 import { FILE_CATEGORIES } from "@/lib/types"
 
@@ -177,7 +178,12 @@ export default function FilesPage() {
   const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
   /* ── Upload ───────────────────────────────────────────── */
-  function handleUpload(doc: FileDoc) {
+  async function handleUpload(doc: FileDoc) {
+    if (!isMockMode) {
+      // Re-fetch to capture any cross-device changes and get proper signed URLs
+      const fresh = await listFiles().catch(() => null)
+      if (fresh) { setFiles(fresh); return }
+    }
     setFiles((prev) => [doc, ...prev])
   }
 
