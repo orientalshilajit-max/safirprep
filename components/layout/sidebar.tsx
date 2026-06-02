@@ -76,28 +76,36 @@ export function Sidebar({ role, isOpen, onClose, companyName, companyLogoUrl }: 
         )}
       >
         {/* Brand */}
-        <div className="flex items-center gap-3 px-4 py-[18px] border-b border-slate-800 shrink-0">
-          {/* Logo or fallback icon */}
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-blue-600 overflow-hidden">
-            {companyLogoUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
+        <div className="flex items-center justify-between px-4 py-[18px] border-b border-slate-800 shrink-0">
+          {companyLogoUrl ? (
+            /* Uploaded logo — no container, transparent bg, centered */
+            <div className="flex flex-col items-start gap-1 min-w-0 flex-1">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={companyLogoUrl}
                 alt={displayName}
-                className="size-full object-contain"
+                className="max-h-[40px] md:max-h-[60px] w-auto object-contain"
               />
-            ) : (
-              <Box className="size-[18px] text-white" />
-            )}
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="text-[13px] font-semibold text-white leading-tight truncate">
-              {displayName}
-            </p>
-            <p className="text-[11px] text-slate-400 leading-tight mt-0.5">
-              {role === "admin" ? "Admin Portal" : "Client Portal"}
-            </p>
-          </div>
+              <p className="text-[11px] text-slate-400 leading-tight">
+                {role === "admin" ? "Admin Portal" : "Client Portal"}
+              </p>
+            </div>
+          ) : (
+            /* Fallback: blue icon + company name + subtitle */
+            <div className="flex items-center gap-3 min-w-0 flex-1">
+              <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-blue-600">
+                <Box className="size-[18px] text-white" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-[13px] font-semibold text-white leading-tight truncate">
+                  {displayName}
+                </p>
+                <p className="text-[11px] text-slate-400 leading-tight mt-0.5">
+                  {role === "admin" ? "Admin Portal" : "Client Portal"}
+                </p>
+              </div>
+            </div>
+          )}
           {/* Close button — mobile only */}
           <button
             onClick={onClose}

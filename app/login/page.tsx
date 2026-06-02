@@ -109,7 +109,7 @@ function LoginForm() {
           <div>
             <p className="text-[19px] font-bold text-white leading-tight">{branding.companyName}</p>
             <p className="text-[12px] text-slate-400 leading-tight mt-0.5">
-              Prep Center Portal
+              Portal
             </p>
           </div>
         </div>
