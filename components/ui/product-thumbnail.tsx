@@ -1,3 +1,4 @@
+import Image from "next/image"
 import { cn } from "@/lib/utils"
 
 const palette = [
@@ -26,6 +27,8 @@ const sizes = {
   lg: "size-16 text-xl",
 }
 
+const pixelSizes = { sm: 32, md: 40, lg: 64 }
+
 export function ProductThumbnail({
   src,
   name,
@@ -36,9 +39,12 @@ export function ProductThumbnail({
 
   if (src) {
     return (
-      <img
+      <Image
         src={src}
         alt={name}
+        width={pixelSizes[size]}
+        height={pixelSizes[size]}
+        unoptimized
         className={cn("rounded-md object-cover shrink-0", sizes[size])}
       />
     )

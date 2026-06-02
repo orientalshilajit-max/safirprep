@@ -1,5 +1,6 @@
 "use client"
 
+import Image from "next/image"
 import { useState, useRef } from "react"
 import { Upload, AlertCircle, X } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
@@ -203,9 +204,12 @@ export function ProductModal({
           <div className="flex items-center gap-4">
             {displayImage ? (
               <div className="relative shrink-0">
-                <img
+                <Image
                   src={displayImage}
                   alt="Product"
+                  width={64}
+                  height={64}
+                  unoptimized
                   className="size-16 rounded-lg object-cover border border-gray-200"
                 />
                 <button

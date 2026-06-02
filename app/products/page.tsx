@@ -1,5 +1,6 @@
 "use client"
 
+import Image from "next/image"
 import { useState, useMemo, useEffect } from "react"
 import {
   Search, SlidersHorizontal, Plus, Pencil,
@@ -538,10 +539,13 @@ export default function ProductsPage() {
           >
             <X className="size-5" />
           </button>
-          <img
+          <Image
             src={previewImage}
             alt="Product preview"
-            className="max-h-[90vh] max-w-[90vw] rounded-xl object-contain shadow-2xl"
+            width={1920}
+            height={1080}
+            unoptimized
+            className="max-h-[90vh] max-w-[90vw] w-auto h-auto rounded-xl object-contain shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           />
         </div>

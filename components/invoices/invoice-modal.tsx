@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { Pencil, Download, X, Plus, Trash2, Box, CheckCircle, AlertCircle } from "lucide-react"
+import { Pencil, Download, Plus, Trash2, Box, CheckCircle, AlertCircle } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { cn } from "@/lib/utils"
@@ -19,72 +19,6 @@ function lineTotal(item: InvoiceLineItem) {
 
 function invoiceTotal(items: InvoiceLineItem[]) {
   return items.reduce((s, i) => s + lineTotal(i), 0)
-}
-
-/* ── Editable line item row ─────────────────────────────── */
-function EditableRow({
-  item,
-  onChange,
-  onRemove,
-}: {
-  item: InvoiceLineItem
-  onChange: (updated: InvoiceLineItem) => void
-  onRemove: () => void
-}) {
-  return (
-    <tr className="border-b border-gray-100 group">
-      <td className="py-2 pr-3">
-        <input
-          value={item.description}
-          onChange={(e) => onChange({ ...item, description: e.target.value })}
-          className="w-full text-[13px] text-gray-800 bg-gray-50 border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400"
-        />
-      </td>
-      <td className="py-2 pr-3 w-20">
-        <input
-          type="number"
-          min={1}
-          value={item.quantity}
-          onChange={(e) => onChange({ ...item, quantity: Math.max(1, Number(e.target.value)) })}
-          className="w-full text-[13px] text-right text-gray-800 bg-gray-50 border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400"
-        />
-      </td>
-      <td className="py-2 pr-3 w-28">
-        <input
-          type="number"
-          min={0}
-          step={0.01}
-          value={item.unitPrice}
-          onChange={(e) => onChange({ ...item, unitPrice: Math.max(0, Number(e.target.value)) })}
-          className="w-full text-[13px] text-right text-gray-800 bg-gray-50 border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400"
-        />
-      </td>
-      <td className="py-2 text-right w-24">
-        <span className="text-[13px] font-semibold text-gray-800">{fmt(lineTotal(item))}</span>
-      </td>
-      <td className="py-2 pl-2 w-8">
-        <button
-          type="button"
-          onClick={onRemove}
-          className="opacity-0 group-hover:opacity-100 flex size-6 items-center justify-center rounded text-gray-300 hover:text-red-500 hover:bg-red-50 transition-all"
-        >
-          <Trash2 className="size-3.5" />
-        </button>
-      </td>
-    </tr>
-  )
-}
-
-/* ── View line item row ─────────────────────────────────── */
-function ViewRow({ item }: { item: InvoiceLineItem }) {
-  return (
-    <tr className="border-b border-gray-100">
-      <td className="py-2.5 pr-3 text-[13px] text-gray-700">{item.description}</td>
-      <td className="py-2.5 pr-3 w-20 text-right text-[13px] text-gray-600 tabular-nums">{item.quantity.toLocaleString()}</td>
-      <td className="py-2.5 pr-3 w-28 text-right text-[13px] text-gray-600 tabular-nums">{fmt(item.unitPrice)}</td>
-      <td className="py-2.5 w-24 text-right text-[13px] font-semibold text-gray-800 tabular-nums">{fmt(lineTotal(item))}</td>
-    </tr>
-  )
 }
 
 /* ── Main modal ─────────────────────────────────────────── */

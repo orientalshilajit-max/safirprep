@@ -42,7 +42,7 @@ export default function EditShipmentPage() {
 
   /* ── Local edit state — lazy-initialised from shipment ─── */
   const [status,         setStatus]         = useState<ShipmentStatus>(() => shipment?.status ?? "In Transit")
-  const [originalStatus, setOriginalStatus] = useState<ShipmentStatus>(() => shipment?.status ?? "In Transit")
+  const [originalStatus] = useState<ShipmentStatus>(() => shipment?.status ?? "In Transit")
   const [shipProducts,   setShipProducts]   = useState<ShipmentProduct[]>(() => shipment ? shipment.products.map((p) => ({ ...p })) : [])
   const [shipTracking,   setShipTracking]   = useState<ShipmentTracking[]>(() => shipment ? shipment.tracking.map((t) => ({ ...t })) : [])
   const [notes,          setNotes]          = useState<string>(() => shipment?.notes ?? "")
