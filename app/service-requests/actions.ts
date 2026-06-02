@@ -438,6 +438,59 @@ export async function updateRequest(id: string, input: UpdateInput): Promise<Ser
   return mapRow(full as unknown as DbRow)
 }
 
+// ── updateRequestStatus ───────────────────────────────────────
+// Lightweight status-only update. Handles inventory restoration on cancel.
+// Only admins may call this.
+
+export async function updateRequestStatus(
+  id: string,
+  newStatus: ServiceStatus
+): Promise<ServiceRequest> {
+  const supabase = await createSupabaseServerClient()
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) throw new Error("Unauthorized")
+  const isAdmin = user.app_metadata?.role === "admin"
+  if (!isAdmin) throw new Error("Only admins can change request status.")
+
+  const { data: current, error: gErr } = await supabase
+    .from("service_requests")
+    .select("status, inventory_deducted, service_request_items(product_id, quantity)")
+    .eq("id", id)
+    .single()
+  if (gErr) throw new Error(gErr.message)
+
+  const currentStatus     = current.status as string
+  const inventoryDeducted = current.inventory_deducted as boolean
+  const currentItems      = (current.service_request_items ?? []) as { product_id: string; quantity: number }[]
+  const currentItem       = currentItems[0] ?? null
+
+  type DbServiceStatus = "new" | "in_progress" | "completed" | "need_attention" | "invoiced" | "cancelled"
+  const newDbStatus       = TO_DB[newStatus] as DbServiceStatus
+  const becomingCancelled = newDbStatus === "cancelled" && currentStatus !== "cancelled"
+
+  const { error: uErr } = await supabase
+    .from("service_requests")
+    .update({
+      status: newDbStatus,
+      ...(becomingCancelled && inventoryDeducted ? { inventory_deducted: false } : {}),
+    })
+    .eq("id", id)
+  if (uErr) throw new Error(uErr.message)
+
+  if (becomingCancelled && inventoryDeducted && currentItem) {
+    await adjustAvailable(currentItem.product_id, +currentItem.quantity)
+  }
+
+  const { data: full, error: fErr } = await supabase
+    .from("service_requests")
+    .select(REQUEST_SELECT)
+    .eq("id", id)
+    .single()
+  if (fErr) throw new Error(fErr.message)
+  return mapRow(full as unknown as DbRow)
+}
+
 // ── archiveRequest ────────────────────────────────────────────
 
 export async function archiveRequest(id: string): Promise<void> {

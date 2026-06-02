@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect } from "react"
 import {
   Search, SlidersHorizontal, Plus, Pencil, Archive,
   FileText, CheckCircle, AlertTriangle, Clock, List,
-  ChevronLeft, ChevronRight,
+  ChevronLeft, ChevronRight, ChevronDown, AlertCircle,
 } from "lucide-react"
 import {
   useRole, useRequests, useProducts, useInvoices,
@@ -22,6 +22,7 @@ import { SERVICE_TYPES } from "@/lib/types"
 import {
   createRequest,
   updateRequest,
+  updateRequestStatus,
   archiveRequest,
 } from "@/app/service-requests/actions"
 import { listProductClients } from "@/app/products/actions"
@@ -62,6 +63,18 @@ export default function ServiceRequestsPage() {
   const [editing,       setEditing]       = useState<ServiceRequest | null>(null)
   const [archiveTarget, setArchiveTarget] = useState<ServiceRequest | null>(null)
   const [filesPreview,  setFilesPreview]  = useState<ServiceRequest | null>(null)
+
+  // Inline status dropdown (fixed-position, same pattern as Shipments)
+  const [statusDropdown, setStatusDropdown] = useState<{ id: string; top: number; left: number } | null>(null)
+  // Confirm modal for cancellation with reserved inventory
+  const [confirmCancel, setConfirmCancel] = useState<{ request: ServiceRequest; newStatus: ServiceStatus } | null>(null)
+  // Flash message for status-change feedback
+  const [actionMsg, setActionMsg] = useState<{ text: string; isError: boolean } | null>(null)
+
+  function flashMsg(text: string, isError = false) {
+    setActionMsg({ text, isError })
+    setTimeout(() => setActionMsg(null), 4000)
+  }
 
   // Client list for admin's modal selector (Supabase mode only)
   const [pageClients, setPageClients] = useState<{ id: string; name: string }[]>([])
@@ -489,6 +502,77 @@ export default function ServiceRequestsPage() {
     setArchiveTarget(null)
   }
 
+  /* ── Inline status change ────────────────────────────────── */
+  function handleStatusBadgeClick(e: React.MouseEvent, request: ServiceRequest) {
+    e.stopPropagation()
+    if (statusDropdown?.id === request.id) { setStatusDropdown(null); return }
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setStatusDropdown({ id: request.id, top: rect.bottom + 4, left: rect.left })
+  }
+
+  function handleStatusSelect(newStatus: ServiceStatus) {
+    const request = statusDropdown ? requests.find((r) => r.id === statusDropdown.id) : null
+    setStatusDropdown(null)
+    if (!request || newStatus === request.status) return
+
+    const becomingCancelled = newStatus === "Cancelled" && request.inventoryDeducted
+    if (becomingCancelled) {
+      setConfirmCancel({ request, newStatus })
+      return
+    }
+    void handleQuickStatusChange(request, newStatus)
+  }
+
+  async function handleQuickStatusChange(request: ServiceRequest, newStatus: ServiceStatus) {
+    // Mock mode: update status and mirror inventory change
+    if (isMockMode) {
+      setRequests((prev) => prev.map((r) => r.id === request.id ? { ...r, status: newStatus } : r))
+      if (newStatus === "Cancelled" && request.inventoryDeducted) {
+        setProducts((prev) => prev.map((p) =>
+          p.id === request.productId ? { ...p, available: p.available + request.quantity } : p
+        ))
+      }
+      return
+    }
+
+    // Supabase mode
+    try {
+      const updated = await updateRequestStatus(request.id, newStatus)
+      setRequests((prev) => prev.map((r) => r.id === request.id ? updated : r))
+
+      if (newStatus === "Cancelled" && request.inventoryDeducted) {
+        setProducts((prev) => prev.map((p) =>
+          p.id === request.productId ? { ...p, available: p.available + request.quantity } : p
+        ))
+      }
+
+      if (role === "admin" && newStatus === "Invoiced" && request.status !== "Invoiced") {
+        const alreadyHasInvoice = invoices.some((inv) => inv.relatedRequestNumber === request.requestNumber)
+        if (!alreadyHasInvoice) {
+          try {
+            const unitPrice  = SERVICE_UNIT_PRICES[request.service] ?? 1.00
+            const dueDateObj = new Date()
+            dueDateObj.setDate(dueDateObj.getDate() + 14)
+            const dueDate = dueDateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+            const newInvoice = await createInvoice({
+              clientId:  request.clientId,
+              requestId: request.id,
+              lineItems: [{ description: `${request.service} – ${request.productName} (${request.quantity} units)`, quantity: request.quantity, unitPrice }],
+              dueDate,
+              notes: "",
+            })
+            setInvoices((prev) => [newInvoice, ...prev])
+          } catch {
+            flashMsg("Status updated. Invoice creation failed — create it manually.", true)
+            return
+          }
+        }
+      }
+    } catch (err) {
+      flashMsg(err instanceof Error ? err.message : "Failed to update status.", true)
+    }
+  }
+
   function handleStatClick(filter: ServiceStatus) {
     setStatusFilter((prev) => (prev === filter ? "all" : filter))
     setPage(1)
@@ -543,7 +627,20 @@ export default function ServiceRequestsPage() {
     {
       id: "status",
       header: "Status",
-      cell: (row) => <StatusBadge status={row.status} />,
+      cell: (row) => {
+        if (role !== "admin") return <StatusBadge status={row.status} />
+        return (
+          <button
+            type="button"
+            onClick={(e) => handleStatusBadgeClick(e, row)}
+            className="inline-flex items-center gap-1 rounded-full hover:ring-2 hover:ring-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-400 transition-all"
+            title="Change status"
+          >
+            <StatusBadge status={row.status} />
+            <ChevronDown className="size-3 text-gray-400 shrink-0" />
+          </button>
+        )
+      },
     },
     {
       id: "files",
@@ -637,6 +734,14 @@ export default function ServiceRequestsPage() {
         <StatCard label="Completed"     value={counts.Completed}        icon={CheckCircle}   iconClass="bg-green-50 text-green-600"  active={statusFilter === "Completed"}     onClick={() => handleStatClick("Completed")} />
         <StatCard label="Need Attention" value={counts["Need Attention"]} icon={AlertTriangle} iconClass="bg-red-50 text-red-500"     active={statusFilter === "Need Attention"} onClick={() => handleStatClick("Need Attention")} />
       </div>
+
+      {/* Action flash message */}
+      {actionMsg && (
+        <div className={`flex items-start gap-2 rounded-lg border px-4 py-3 ${actionMsg.isError ? "border-red-100 bg-red-50" : "border-green-100 bg-green-50"}`}>
+          <AlertCircle className={`size-4 mt-0.5 shrink-0 ${actionMsg.isError ? "text-red-500" : "text-green-600"}`} />
+          <p className={`text-[13px] ${actionMsg.isError ? "text-red-600" : "text-green-700"}`}>{actionMsg.text}</p>
+        </div>
+      )}
 
       {/* Table card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden flex-1 min-h-0">
@@ -795,6 +900,54 @@ export default function ServiceRequestsPage() {
         confirmLabel="Archive"
         variant="danger"
       />
+
+      {/* Cancel with inventory confirm */}
+      <ConfirmModal
+        isOpen={!!confirmCancel}
+        onClose={() => setConfirmCancel(null)}
+        onConfirm={() => {
+          if (confirmCancel) {
+            void handleQuickStatusChange(confirmCancel.request, confirmCancel.newStatus)
+            setConfirmCancel(null)
+          }
+        }}
+        title="Cancel Request"
+        message={`Cancelling ${confirmCancel?.request.requestNumber} will return the reserved inventory to Available. Continue?`}
+        confirmLabel="Cancel Request"
+        variant="danger"
+      />
+
+      {/* Inline status dropdown */}
+      {statusDropdown && (
+        <>
+          <div
+            className="fixed inset-0 z-30"
+            onClick={() => setStatusDropdown(null)}
+          />
+          <div
+            className="fixed z-40 min-w-[180px] rounded-lg border border-gray-200 bg-white py-1 shadow-lg"
+            style={{ top: statusDropdown.top, left: statusDropdown.left }}
+          >
+            {(["New", "In Progress", "Completed", "Need Attention", "Invoiced", "Cancelled"] as ServiceStatus[]).map((s) => {
+              const req = requests.find((r) => r.id === statusDropdown.id)
+              const isCurrent = req?.status === s
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => handleStatusSelect(s)}
+                  className={`flex w-full items-center gap-2 px-3 py-2 text-left text-[13px] transition-colors hover:bg-gray-50 ${
+                    isCurrent ? "font-semibold text-blue-600" : "text-gray-700"
+                  }`}
+                >
+                  <span className={`size-1.5 shrink-0 rounded-full ${isCurrent ? "bg-blue-600" : ""}`} />
+                  {s}
+                </button>
+              )
+            })}
+          </div>
+        </>
+      )}
     </div>
   )
 }
