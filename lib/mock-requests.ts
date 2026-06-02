@@ -10,6 +10,7 @@ export const mockRequests: ServiceRequest[] = [
     productName: "Wireless Earbuds",
     productSku: "WE-1000",
     service: "FBA Prep",
+    services: [],
     quantity: 500,
     status: "In Progress",
     files: [
@@ -30,6 +31,7 @@ export const mockRequests: ServiceRequest[] = [
     productName: "Stainless Steel Tumbler",
     productSku: "TMB-500",
     service: "Labeling",
+    services: [],
     quantity: 300,
     status: "New",
     files: [
@@ -49,6 +51,7 @@ export const mockRequests: ServiceRequest[] = [
     productName: "Phone Case iPhone 14",
     productSku: "PC-14-BLK",
     service: "Bundling",
+    services: [],
     quantity: 200,
     status: "New",
     files: [],
@@ -69,6 +72,7 @@ export const mockRequests: ServiceRequest[] = [
     productName: "Yoga Mat",
     productSku: "YM-200",
     service: "FBA Prep",
+    services: [],
     quantity: 200,
     status: "Completed",
     files: [
@@ -90,6 +94,7 @@ export const mockRequests: ServiceRequest[] = [
     productName: "Resistance Band Set",
     productSku: "RB-SET",
     service: "FBA Prep",
+    services: [],
     quantity: 250,
     status: "Completed",
     files: [
@@ -109,6 +114,7 @@ export const mockRequests: ServiceRequest[] = [
     productName: "Wireless Earbuds",
     productSku: "WE-1000",
     service: "Inspection",
+    services: [],
     quantity: 100,
     status: "Need Attention",
     files: [],
@@ -126,6 +132,7 @@ export const mockRequests: ServiceRequest[] = [
     productName: "Stainless Steel Tumbler",
     productSku: "TMB-500",
     service: "Labeling",
+    services: [],
     quantity: 150,
     status: "Invoiced",
     files: [

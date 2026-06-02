@@ -81,14 +81,20 @@ export default function ServiceRequestsPage() {
   const filtered = useMemo(() => {
     const q = search.toLowerCase().trim()
     return active.filter((r) => {
+      const allServiceNames = r.services?.length
+        ? r.services.map((s) => s.serviceName.toLowerCase())
+        : [r.service.toLowerCase()]
       const matchSearch =
         !q ||
         r.requestNumber.toLowerCase().includes(q) ||
         r.productName.toLowerCase().includes(q) ||
         r.clientName.toLowerCase().includes(q) ||
-        r.service.toLowerCase().includes(q)
+        allServiceNames.some((n) => n.includes(q))
       const matchStatus  = statusFilter  === "all" || r.status  === statusFilter
-      const matchService = serviceFilter === "all" || r.service === serviceFilter
+      const matchService =
+        serviceFilter === "all" ||
+        r.service === serviceFilter ||
+        r.services?.some((s) => s.serviceName === serviceFilter)
       return matchSearch && matchStatus && matchService
     })
   }, [active, search, statusFilter, serviceFilter])
@@ -137,11 +143,27 @@ export default function ServiceRequestsPage() {
       month: "short", day: "numeric", year: "numeric",
     })
 
-    // ── Mock mode: keep original logic unchanged ───────────
+    const validServices = form.services.filter((s) => s.serviceName.trim())
+    const primaryServiceName = (validServices[0]?.serviceName ?? "") as ServiceType
+    const serviceInputs = validServices.map((s) => ({
+      serviceName:   s.serviceName,
+      serviceTypeId: s.serviceTypeId,
+      notes:         s.notes,
+    }))
+    const serviceDetails = {
+      prepNotes:          form.prepNotes,
+      orderNotes:         form.orderNotes,
+      placementNotes:     form.placementNotes,
+      bundleInstructions: form.bundleInstructions,
+      unitsPerBundle:     form.unitsPerBundle,
+      serviceDescription: form.serviceDescription,
+    }
+
+    // ── Mock mode ──────────────────────────────────────────
     if (isMockMode) {
       if (editing) {
-        const oldStatus  = editing.status
-        const newStatus  = form.status
+        const oldStatus   = editing.status
+        const newStatus   = form.status
         const productName = requests.find((x) => x.id === editing.id)?.productName ?? editing.productName
 
         setRequests((prev) =>
@@ -149,21 +171,22 @@ export default function ServiceRequestsPage() {
             r.id === editing.id
               ? {
                   ...r,
-                  productId: form.productId,
+                  productId:   form.productId,
                   productName,
-                  quantity:  form.quantity,
-                  service:   form.service as ServiceType,
-                  status:    newStatus,
-                  files:     form.files,
-                  notes:     form.notes,
-                  serviceDetails: {
-                    prepNotes:          form.prepNotes,
-                    orderNotes:         form.orderNotes,
-                    placementNotes:     form.placementNotes,
-                    bundleInstructions: form.bundleInstructions,
-                    unitsPerBundle:     form.unitsPerBundle,
-                    serviceDescription: form.serviceDescription,
-                  },
+                  quantity:    form.quantity,
+                  service:     primaryServiceName || r.service,
+                  services:    validServices.map((s) => ({
+                    serviceName:   s.serviceName,
+                    serviceTypeId: s.serviceTypeId,
+                    quantity:      form.quantity,
+                    unitPrice:     SERVICE_UNIT_PRICES[s.serviceName] ?? 1,
+                    totalPrice:    (SERVICE_UNIT_PRICES[s.serviceName] ?? 1) * form.quantity,
+                    notes:         s.notes,
+                  })),
+                  status:      newStatus,
+                  files:       form.files,
+                  notes:       form.notes,
+                  serviceDetails,
                 }
               : r
           )
@@ -182,7 +205,7 @@ export default function ServiceRequestsPage() {
           const allNums   = invoices.map((i) => parseInt(i.invoiceNumber.replace("INV-", "")) || 0)
           const nextNum   = Math.max(...allNums, 41) + 1
           const dueDate   = new Date(Date.now() + 14 * 86_400_000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-          const unitPrice = SERVICE_UNIT_PRICES[form.service] ?? 1.00
+          const unitPrice = SERVICE_UNIT_PRICES[primaryServiceName] ?? 1.00
           const newInvoice: Invoice = {
             id:             `inv-${Date.now()}`,
             invoiceNumber:  `INV-${nextNum.toString().padStart(4, "0")}`,
@@ -193,7 +216,7 @@ export default function ServiceRequestsPage() {
             date:           today,
             dueDate,
             status:         "Unpaid",
-            lineItems:      [{ id: `li-${Date.now()}`, description: `${form.service} – ${productName} (${form.quantity} units)`, quantity: form.quantity, unitPrice }],
+            lineItems:      [{ id: `li-${Date.now()}`, description: `${primaryServiceName} – ${productName} (${form.quantity} units)`, quantity: form.quantity, unitPrice }],
             notes:          "",
             relatedRequestNumber: editing.requestNumber,
           }
@@ -201,7 +224,7 @@ export default function ServiceRequestsPage() {
         }
 
         syncFilesToContext(
-          { id: editing.id, requestNumber: editing.requestNumber, clientId: editing.clientId, clientName: editing.clientName, service: form.service, createdAt: editing.createdAt },
+          { id: editing.id, requestNumber: editing.requestNumber, clientId: editing.clientId, clientName: editing.clientName, service: primaryServiceName, createdAt: editing.createdAt },
           form.files
         )
       } else {
@@ -215,16 +238,20 @@ export default function ServiceRequestsPage() {
           productId:     form.productId,
           productName:   "",
           productSku:    "",
-          service:       form.service as ServiceType,
+          service:       primaryServiceName,
+          services:      validServices.map((s) => ({
+            serviceName:   s.serviceName,
+            serviceTypeId: s.serviceTypeId,
+            quantity:      form.quantity,
+            unitPrice:     SERVICE_UNIT_PRICES[s.serviceName] ?? 1,
+            totalPrice:    (SERVICE_UNIT_PRICES[s.serviceName] ?? 1) * form.quantity,
+            notes:         s.notes,
+          })),
           quantity:      form.quantity,
           status:        "New",
           files:         form.files,
           notes:         form.notes,
-          serviceDetails: {
-            prepNotes: form.prepNotes, orderNotes: form.orderNotes,
-            placementNotes: form.placementNotes, bundleInstructions: form.bundleInstructions,
-            unitsPerBundle: form.unitsPerBundle, serviceDescription: form.serviceDescription,
-          },
+          serviceDetails,
           createdAt:         today,
           inventoryDeducted: true,
         }
@@ -239,7 +266,7 @@ export default function ServiceRequestsPage() {
         })
         setRequests((prev) => [newReq, ...prev])
         syncFilesToContext(
-          { id: newReq.id, requestNumber: newReq.requestNumber, clientId: newReq.clientId, clientName: newReq.clientName, service: form.service, createdAt: today },
+          { id: newReq.id, requestNumber: newReq.requestNumber, clientId: newReq.clientId, clientName: newReq.clientName, service: primaryServiceName, createdAt: today },
           form.files
         )
       }
@@ -253,17 +280,10 @@ export default function ServiceRequestsPage() {
       const updated = await updateRequest(editing.id, {
         productId:      form.productId,
         quantity:       form.quantity,
-        service:        form.service as ServiceType,
+        services:       serviceInputs,
         status:         form.status,
         notes:          form.notes,
-        serviceDetails: {
-          prepNotes:          form.prepNotes,
-          orderNotes:         form.orderNotes,
-          placementNotes:     form.placementNotes,
-          bundleInstructions: form.bundleInstructions,
-          unitsPerBundle:     form.unitsPerBundle,
-          serviceDescription: form.serviceDescription,
-        },
+        serviceDetails,
       })
 
       setRequests((prev) => prev.map((r) => r.id === editing.id ? updated : r))
@@ -294,14 +314,14 @@ export default function ServiceRequestsPage() {
       const alreadyHasInvoice = invoices.some((inv) => inv.relatedRequestNumber === editing.requestNumber)
       if (role === "admin" && becomingInvoiced && !alreadyHasInvoice) {
         try {
-          const unitPrice = SERVICE_UNIT_PRICES[form.service] ?? 1.00
+          const unitPrice = SERVICE_UNIT_PRICES[primaryServiceName] ?? 1.00
           const dueDate   = new Date(Date.now() + 14 * 86_400_000)
             .toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
           const newInvoice = await createInvoice({
             clientId:  editing.clientId,
             requestId: editing.id,
             lineItems: [{
-              description: `${form.service} – ${updated.productName} (${form.quantity} units)`,
+              description: `${primaryServiceName} – ${updated.productName} (${form.quantity} units)`,
               quantity:    form.quantity,
               unitPrice,
             }],
@@ -319,16 +339,9 @@ export default function ServiceRequestsPage() {
         clientId:  form.clientId || undefined,
         productId: form.productId,
         quantity:  form.quantity,
-        service:   form.service as ServiceType,
+        services:  serviceInputs,
         notes:     form.notes,
-        serviceDetails: {
-          prepNotes:          form.prepNotes,
-          orderNotes:         form.orderNotes,
-          placementNotes:     form.placementNotes,
-          bundleInstructions: form.bundleInstructions,
-          unitsPerBundle:     form.unitsPerBundle,
-          serviceDescription: form.serviceDescription,
-        },
+        serviceDetails,
       })
 
       setRequests((prev) => [created, ...prev])
@@ -389,8 +402,19 @@ export default function ServiceRequestsPage() {
     },
     {
       id: "service",
-      header: "Service",
-      cell: (row) => <span className="text-[12px] text-gray-700">{row.service}</span>,
+      header: "Services",
+      cell: (row) => {
+        const svcs = row.services?.length ? row.services : null
+        if (!svcs) return <span className="text-[12px] text-gray-700">{row.service}</span>
+        const first = svcs[0].serviceName
+        const extra = svcs.length - 1
+        return (
+          <span className="text-[12px] text-gray-700">
+            {first}
+            {extra > 0 && <span className="text-gray-400 ml-1">+{extra}</span>}
+          </span>
+        )
+      },
     },
     {
       id: "quantity",

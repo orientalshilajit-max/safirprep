@@ -135,6 +135,16 @@ export type ServiceDetails = {
   serviceDescription?: string
 }
 
+export type RequestService = {
+  id?: string
+  serviceTypeId?: string | null
+  serviceName: string
+  quantity: number
+  unitPrice: number
+  totalPrice: number
+  notes: string
+}
+
 export type ServiceRequest = {
   id: string
   requestNumber: string
@@ -143,7 +153,8 @@ export type ServiceRequest = {
   productId: string
   productName: string
   productSku: string
-  service: ServiceType
+  service: ServiceType       // primary service (backward compat)
+  services: RequestService[] // all services (new)
   quantity: number
   status: ServiceStatus
   files: ServiceFile[]

@@ -2,7 +2,7 @@
 
 import { createSupabaseServerClient } from "@/lib/supabase-server"
 import { createServerAdminClient }     from "@/lib/supabase"
-import type { ServiceRequest, ServiceStatus, ServiceType, ServiceDetails } from "@/lib/types"
+import type { ServiceRequest, RequestService, ServiceStatus, ServiceType, ServiceDetails } from "@/lib/types"
 
 // ── Status mapping ────────────────────────────────────────────
 
@@ -24,7 +24,66 @@ const FROM_DB: Record<string, ServiceStatus> = {
   cancelled:      "Cancelled",
 }
 
+// ── Available service types ───────────────────────────────────
+
+export type AvailableServiceType = {
+  id: string
+  name: string
+  visibleToCustomers: boolean
+  pricingRules: {
+    minQty:       number
+    maxQty:       number | null
+    pricePerUnit: number
+    label:        string | null
+  }[]
+}
+
+export async function listAvailableServiceTypes(): Promise<AvailableServiceType[]> {
+  const supabase = await createSupabaseServerClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return []
+
+  const isAdmin = user.app_metadata?.role === "admin"
+
+  const { data, error } = await supabase
+    .from("service_types")
+    .select("id, name, visible_to_customers, service_pricing_rules(min_qty, max_qty, price_per_unit, label, sort_order)")
+    .eq("is_active", true)
+    .order("sort_order")
+    .order("name")
+
+  if (error || !data) return []
+
+  return data
+    .filter((s) => isAdmin || s.visible_to_customers)
+    .map((s) => ({
+      id:                 s.id,
+      name:               s.name,
+      visibleToCustomers: s.visible_to_customers,
+      pricingRules: ((s.service_pricing_rules as {
+        min_qty: number; max_qty: number | null; price_per_unit: number; label: string | null; sort_order: number
+      }[]) ?? [])
+        .sort((a, b) => a.min_qty - b.min_qty)
+        .map((r) => ({
+          minQty:       r.min_qty,
+          maxQty:       r.max_qty,
+          pricePerUnit: r.price_per_unit,
+          label:        r.label,
+        })),
+    }))
+}
+
 // ── Row mapper ────────────────────────────────────────────────
+
+type DbServiceRow = {
+  id: string
+  service_type_id: string | null
+  service_name_snapshot: string
+  quantity: number
+  unit_price: number
+  total_price: number
+  notes: string | null
+}
 
 type DbRow = {
   id: string
@@ -45,11 +104,25 @@ type DbRow = {
     notes: string | null
     products: { name: string; sku: string } | null
   }[]
+  service_request_services: DbServiceRow[]
 }
 
 function mapRow(row: DbRow): ServiceRequest {
-  const item = row.service_request_items?.[0] ?? null
-  const sd   = row.service_details ?? {}
+  const item     = row.service_request_items?.[0] ?? null
+  const sd       = row.service_details ?? {}
+  const dbSvcs   = row.service_request_services ?? []
+
+  const services: RequestService[] = dbSvcs.map((s) => ({
+    id:            s.id,
+    serviceTypeId: s.service_type_id,
+    serviceName:   s.service_name_snapshot,
+    quantity:      s.quantity,
+    unitPrice:     s.unit_price,
+    totalPrice:    s.total_price,
+    notes:         s.notes ?? "",
+  }))
+
+  const primaryService = (services[0]?.serviceName ?? row.service_type) as ServiceType
 
   return {
     id:            row.id,
@@ -59,7 +132,8 @@ function mapRow(row: DbRow): ServiceRequest {
     productId:     item?.product_id ?? "",
     productName:   item?.products?.name ?? "",
     productSku:    item?.products?.sku  ?? "",
-    service:       row.service_type as ServiceType,
+    service:       primaryService,
+    services,
     quantity:      item?.quantity ?? 0,
     status:        FROM_DB[row.status] ?? "New",
     files:         [],
@@ -84,13 +158,11 @@ const REQUEST_SELECT = `
   id, client_id, request_number, service_type, status, notes,
   inventory_deducted, service_details, created_at, deleted_at,
   clients (company_name),
-  service_request_items (id, product_id, quantity, notes, products (name, sku))
+  service_request_items (id, product_id, quantity, notes, products (name, sku)),
+  service_request_services (id, service_type_id, service_name_snapshot, quantity, unit_price, total_price, notes)
 ` as const
 
 // ── Inventory helper ──────────────────────────────────────────
-// Always uses the service-role admin client:
-//   • There is no client UPDATE RLS policy on inventory.
-//   • Ownership is verified via the caller's user session before this is called.
 
 async function adjustAvailable(productId: string, delta: number) {
   if (delta === 0 || !productId) return
@@ -105,6 +177,40 @@ async function adjustAvailable(productId: string, delta: number) {
     .from("inventory")
     .update({ available_units: Math.max(0, inv.available_units + delta) })
     .eq("id", inv.id)
+}
+
+// ── Pricing rule lookup (server-side snapshot at save time) ───
+
+async function lookupUnitPrice(
+  serviceTypeId: string | null,
+  serviceName: string,
+  quantity: number
+): Promise<number> {
+  if (quantity <= 0) return 0
+  try {
+    const admin = createServerAdminClient()
+
+    let stId = serviceTypeId
+    if (!stId) {
+      const { data: st } = await admin
+        .from("service_types").select("id").eq("name", serviceName).maybeSingle()
+      stId = st?.id ?? null
+    }
+    if (!stId) return 0
+
+    const { data: rules } = await admin
+      .from("service_pricing_rules")
+      .select("price_per_unit, min_qty, max_qty")
+      .eq("service_type_id", stId)
+      .lte("min_qty", quantity)
+      .order("min_qty", { ascending: false })
+
+    if (!rules || rules.length === 0) return 0
+    const match = rules.find((r) => r.max_qty === null || r.max_qty >= quantity)
+    return match?.price_per_unit ?? 0
+  } catch {
+    return 0
+  }
 }
 
 // ── listRequests ──────────────────────────────────────────────
@@ -122,12 +228,18 @@ export async function listRequests(): Promise<ServiceRequest[]> {
 
 // ── createRequest ─────────────────────────────────────────────
 
+type ServiceInput = {
+  serviceName:   string
+  serviceTypeId: string | null
+  notes:         string
+}
+
 type CreateInput = {
-  clientId?: string
-  productId: string
-  quantity: number
-  service: ServiceType | ""
-  notes: string
+  clientId?:      string
+  productId:      string
+  quantity:       number
+  services:       ServiceInput[]
+  notes:          string
   serviceDetails: ServiceDetails
 }
 
@@ -142,10 +254,12 @@ export async function createRequest(input: CreateInput): Promise<ServiceRequest>
     ? input.clientId
     : (user.app_metadata?.client_id as string | undefined)
 
-  if (!clientId)        throw new Error(isAdmin ? "Admin must select a client." : "Client ID not found in session.")
-  if (!input.productId) throw new Error("Select a product.")
-  if (!input.service)   throw new Error("Select a service type.")
+  if (!clientId)           throw new Error(isAdmin ? "Admin must select a client." : "Client ID not found in session.")
+  if (!input.productId)    throw new Error("Select a product.")
   if (input.quantity <= 0) throw new Error("Quantity must be greater than 0.")
+
+  const validServices = input.services.filter((s) => s.serviceName.trim())
+  if (!validServices.length) throw new Error("Select at least one service.")
 
   // Generate request number
   const { data: recent } = await supabase
@@ -160,13 +274,15 @@ export async function createRequest(input: CreateInput): Promise<ServiceRequest>
     if (n > maxNum) maxNum = n
   }
 
-  // Insert request (user session — RLS enforces ownership)
+  const primaryService = validServices[0].serviceName
+
+  // Insert request
   const { data: req, error: rErr } = await supabase
     .from("service_requests")
     .insert({
       client_id:          clientId,
       request_number:     `REQ-${maxNum + 1}`,
-      service_type:       input.service,
+      service_type:       primaryService,
       status:             "new",
       notes:              input.notes.trim() || null,
       inventory_deducted: true,
@@ -176,8 +292,9 @@ export async function createRequest(input: CreateInput): Promise<ServiceRequest>
     .single()
   if (rErr) throw new Error(rErr.message)
 
-  // Admin client for child row — no client INSERT policy gap here, but keep consistent
   const admin = createServerAdminClient()
+
+  // Insert product item
   const { error: iErr } = await admin.from("service_request_items").insert({
     request_id: req.id,
     product_id: input.productId,
@@ -185,7 +302,22 @@ export async function createRequest(input: CreateInput): Promise<ServiceRequest>
   })
   if (iErr) throw new Error(iErr.message)
 
-  // Deduct available_units via admin client
+  // Insert service rows with price snapshots
+  for (const svc of validServices) {
+    const unitPrice  = await lookupUnitPrice(svc.serviceTypeId, svc.serviceName, input.quantity)
+    const totalPrice = parseFloat((unitPrice * input.quantity).toFixed(2))
+    await admin.from("service_request_services").insert({
+      request_id:            req.id,
+      service_type_id:       svc.serviceTypeId || null,
+      service_name_snapshot: svc.serviceName,
+      quantity:              input.quantity,
+      unit_price:            unitPrice,
+      total_price:           totalPrice,
+      notes:                 svc.notes.trim() || null,
+    })
+  }
+
+  // Deduct inventory once (regardless of service count)
   await adjustAvailable(input.productId, -input.quantity)
 
   const { data: full, error: fErr } = await supabase
@@ -202,7 +334,7 @@ export async function createRequest(input: CreateInput): Promise<ServiceRequest>
 type UpdateInput = {
   productId:      string
   quantity:       number
-  service:        ServiceType | ""
+  services:       ServiceInput[]
   status:         ServiceStatus
   notes:          string
   serviceDetails: ServiceDetails
@@ -215,7 +347,6 @@ export async function updateRequest(id: string, input: UpdateInput): Promise<Ser
   if (!user) throw new Error("Unauthorized")
   const isAdmin = user.app_metadata?.role === "admin"
 
-  // Verify ownership + load current state (RLS-filtered)
   const { data: current, error: gErr } = await supabase
     .from("service_requests")
     .select("status, inventory_deducted, service_request_items(product_id, quantity)")
@@ -230,7 +361,6 @@ export async function updateRequest(id: string, input: UpdateInput): Promise<Ser
   const oldProductId      = currentItem?.product_id ?? ""
   const oldQuantity       = currentItem?.quantity    ?? 0
 
-  // Clients can only keep "new" or move to "cancelled"
   type DbServiceStatus = "new" | "in_progress" | "completed" | "need_attention" | "invoiced" | "cancelled"
   const newDbStatus: DbServiceStatus = isAdmin
     ? (TO_DB[input.status] as DbServiceStatus)
@@ -239,12 +369,13 @@ export async function updateRequest(id: string, input: UpdateInput): Promise<Ser
         : (currentStatus as DbServiceStatus))
 
   const becomingCancelled = newDbStatus === "cancelled" && currentStatus !== "cancelled"
+  const validServices     = input.services.filter((s) => s.serviceName.trim())
+  const primaryService    = validServices[0]?.serviceName ?? ""
 
-  // Update request record (user session — RLS restricts clients to 'new' → 'new'|'cancelled')
   const { error: uErr } = await supabase
     .from("service_requests")
     .update({
-      service_type:    input.service || undefined,
+      service_type:    primaryService || undefined,
       status:          newDbStatus,
       notes:           input.notes.trim() || null,
       service_details: input.serviceDetails,
@@ -253,12 +384,10 @@ export async function updateRequest(id: string, input: UpdateInput): Promise<Ser
     .eq("id", id)
   if (uErr) throw new Error(uErr.message)
 
-  // Admin client for child-record operations: no client DELETE RLS on service_request_items
   const admin = createServerAdminClient()
 
+  // Replace product item
   await admin.from("service_request_items").delete().eq("request_id", id)
-
-  // Do not re-insert items when the request is being cancelled — they are no longer relevant
   if (!becomingCancelled && input.productId && input.quantity > 0) {
     const { error: insErr } = await admin.from("service_request_items").insert({
       request_id: id,
@@ -268,20 +397,34 @@ export async function updateRequest(id: string, input: UpdateInput): Promise<Ser
     if (insErr) throw new Error(insErr.message)
   }
 
-  // ── Inventory adjustments ─────────────────────────────────
+  // Replace service rows
+  await admin.from("service_request_services").delete().eq("request_id", id)
+  if (!becomingCancelled && validServices.length > 0) {
+    for (const svc of validServices) {
+      const unitPrice  = await lookupUnitPrice(svc.serviceTypeId, svc.serviceName, input.quantity)
+      const totalPrice = parseFloat((unitPrice * input.quantity).toFixed(2))
+      await admin.from("service_request_services").insert({
+        request_id:            id,
+        service_type_id:       svc.serviceTypeId || null,
+        service_name_snapshot: svc.serviceName,
+        quantity:              input.quantity,
+        unit_price:            unitPrice,
+        total_price:           totalPrice,
+        notes:                 svc.notes.trim() || null,
+      })
+    }
+  }
+
+  // Inventory adjustments
   if (inventoryDeducted) {
     if (becomingCancelled) {
-      // Restore the reserved inventory
       await adjustAvailable(oldProductId, +oldQuantity)
     } else if (newDbStatus !== "cancelled") {
       if (oldProductId && oldProductId !== input.productId) {
-        // Product swapped: restore old, deduct new
         await adjustAvailable(oldProductId,    +oldQuantity)
         await adjustAvailable(input.productId, -input.quantity)
       } else if (input.productId) {
-        // Same product, quantity may have changed
-        const delta = oldQuantity - input.quantity
-        await adjustAvailable(input.productId, delta)
+        await adjustAvailable(input.productId, oldQuantity - input.quantity)
       }
     }
   }
@@ -309,7 +452,6 @@ export async function archiveRequest(id: string): Promise<void> {
   if (current) {
     const items = (current.service_request_items ?? []) as { product_id: string; quantity: number }[]
     const item  = items[0] ?? null
-
     if (current.status === "new" && (current.inventory_deducted as boolean) && item) {
       await adjustAvailable(item.product_id, +item.quantity)
     }

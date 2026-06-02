@@ -375,6 +375,42 @@ export type Database = {
           }
         ]
       }
+      service_request_services: {
+        Row: {
+          id: string
+          request_id: string
+          service_type_id: string | null
+          service_name_snapshot: string
+          quantity: number
+          unit_price: number
+          total_price: number
+          notes: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          request_id: string
+          service_type_id?: string | null
+          service_name_snapshot: string
+          quantity?: number
+          unit_price?: number
+          total_price?: number
+          notes?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          request_id?: string
+          service_type_id?: string | null
+          service_name_snapshot?: string
+          quantity?: number
+          unit_price?: number
+          total_price?: number
+          notes?: string | null
+          created_at?: string
+        }
+        Relationships: [{ foreignKeyName: "service_request_services_request_id_fkey"; columns: ["request_id"]; referencedRelation: "service_requests"; referencedColumns: ["id"] }]
+      }
       service_request_items: {
         Row: {
           id: string
@@ -841,8 +877,9 @@ export type DbInventory          = Tables<"inventory">
 export type DbShipment           = Tables<"incoming_shipments">
 export type DbShipmentItem       = Tables<"incoming_shipment_items">
 export type DbShipmentTracking   = Tables<"shipment_trackings">
-export type DbServiceRequest     = Tables<"service_requests">
-export type DbServiceRequestItem = Tables<"service_request_items">
+export type DbServiceRequest        = Tables<"service_requests">
+export type DbServiceRequestItem    = Tables<"service_request_items">
+export type DbServiceRequestService = Tables<"service_request_services">
 export type DbInvoice            = Tables<"invoices">
 export type DbInvoiceItem        = Tables<"invoice_items">
 export type DbFile               = Tables<"files">

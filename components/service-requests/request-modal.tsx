@@ -1,12 +1,13 @@
 "use client"
 
-import { useRef, useState, useEffect } from "react"
-import { FileText, Upload, X, AlertCircle } from "lucide-react"
+import { useRef, useState, useEffect, useMemo } from "react"
+import { FileText, Upload, X, Plus, AlertCircle } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import { useProducts, useRole, useIsMockMode } from "@/components/layout/app-shell"
-import { lookupPricingRule } from "@/app/settings/actions"
+import { listAvailableServiceTypes } from "@/app/service-requests/actions"
+import type { AvailableServiceType } from "@/app/service-requests/actions"
 import { SERVICE_TYPES } from "@/lib/types"
-import type { ServiceFile, ServiceRequest, ServiceStatus, ServiceType } from "@/lib/types"
+import type { ServiceFile, ServiceRequest, ServiceStatus } from "@/lib/types"
 
 const uid = () => Math.random().toString(36).slice(2)
 
@@ -82,14 +83,39 @@ function FileChip({ file, onRemove }: { file: ServiceFile; onRemove: (id: string
   )
 }
 
+/* ── Price computation (client-side from fetched rules) ─── */
+function computeRowPrice(
+  serviceName: string,
+  serviceTypeId: string | null,
+  qty: number,
+  types: AvailableServiceType[]
+): number | null {
+  if (!serviceName || qty <= 0 || types.length === 0) return null
+  const found = types.find(
+    (t) => (serviceTypeId && t.id === serviceTypeId) || t.name === serviceName
+  )
+  if (!found || found.pricingRules.length === 0) return null
+  const eligible = [...found.pricingRules]
+    .filter((r) => r.minQty <= qty)
+    .sort((a, b) => b.minQty - a.minQty)
+  const match = eligible.find((r) => r.maxQty === null || r.maxQty >= qty)
+  return match ? parseFloat((match.pricePerUnit * qty).toFixed(2)) : null
+}
+
 /* ── Form state ─────────────────────────────────────────── */
+type ServiceRowState = {
+  rowId: string
+  serviceTypeId: string | null
+  serviceName: string
+  notes: string
+}
+
 type FormState = {
-  /** Admin-only when creating in Supabase mode */
   clientId: string
   productId: string
   quantity: number
   useAllAvailable: boolean
-  service: ServiceType | ""
+  services: ServiceRowState[]
   files: ServiceFile[]
   notes: string
   status: ServiceStatus
@@ -106,7 +132,7 @@ const emptyForm = (): FormState => ({
   productId: "",
   quantity: 0,
   useAllAvailable: false,
-  service: "",
+  services: [{ rowId: uid(), serviceTypeId: null, serviceName: "", notes: "" }],
   files: [],
   notes: "",
   status: "New",
@@ -125,107 +151,31 @@ const inputClass =
 const textareaClass =
   "w-full px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none placeholder:text-gray-400"
 
-/* ── ServiceFields ──────────────────────────────────────── */
-type ServiceFieldsProps = {
-  service: ServiceType | ""
-  form: FormState
-  onSet: <K extends keyof FormState>(key: K, value: FormState[K]) => void
-  onAddFiles: (files: ServiceFile[]) => void
-  canEdit: boolean
-}
-
-function ServiceFields({ service, form, onSet, onAddFiles, canEdit }: ServiceFieldsProps) {
-  const sectionClass = "mt-3 p-4 bg-gray-50 rounded-lg border border-gray-100 space-y-3"
-
-  if (service === "FBA Prep") return (
-    <div className={sectionClass}>
-      <p className={labelClass}>FBA Prep Details</p>
-      <div className="flex flex-wrap gap-2">
-        <UploadBtn label="Upload FNSKU Label" onAdd={onAddFiles} />
-        <UploadBtn label="Upload Box Label" onAdd={onAddFiles} optional />
-      </div>
-      <div>
-        <label className={labelClass}>Prep Notes</label>
-        <textarea rows={2} value={form.prepNotes} onChange={(e) => onSet("prepNotes", e.target.value)}
-          placeholder="e.g. poly bag, bubble wrap, desiccant…" className={textareaClass} disabled={!canEdit} />
-      </div>
-    </div>
-  )
-
-  if (service === "FBM Fulfillment") return (
-    <div className={sectionClass}>
-      <p className={labelClass}>FBM Details</p>
-      <UploadBtn label="Upload Shipping Label" onAdd={onAddFiles} />
-      <div className="mt-2">
-        <label className={labelClass}>Order / Recipient Notes</label>
-        <textarea rows={2} value={form.orderNotes} onChange={(e) => onSet("orderNotes", e.target.value)}
-          placeholder="Recipient name, special instructions…" className={textareaClass} disabled={!canEdit} />
-      </div>
-    </div>
-  )
-
-  if (service === "Labeling") return (
-    <div className={sectionClass}>
-      <p className={labelClass}>Labeling Details</p>
-      <UploadBtn label="Upload Label File" onAdd={onAddFiles} />
-      <div className="mt-2">
-        <label className={labelClass}>Label Placement Notes</label>
-        <textarea rows={2} value={form.placementNotes} onChange={(e) => onSet("placementNotes", e.target.value)}
-          placeholder="e.g. apply on bottom, avoid seams…" className={textareaClass} disabled={!canEdit} />
-      </div>
-    </div>
-  )
-
-  if (service === "Bundling") return (
-    <div className={sectionClass}>
-      <p className={labelClass}>Bundling Details</p>
-      <div>
-        <label className={labelClass}>Bundle Instructions</label>
-        <textarea rows={2} value={form.bundleInstructions} onChange={(e) => onSet("bundleInstructions", e.target.value)}
-          placeholder="How should units be bundled?" className={textareaClass} disabled={!canEdit} />
-      </div>
-      <div>
-        <label className={labelClass}>Units per Bundle</label>
-        <input type="number" min="1" value={form.unitsPerBundle}
-          onChange={(e) => onSet("unitsPerBundle", Number(e.target.value))}
-          className="w-28 px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-          disabled={!canEdit} />
-      </div>
-    </div>
-  )
-
-  if (service === "Other") return (
-    <div className={sectionClass}>
-      <label className={labelClass}>Service Description <span className="text-red-500">*</span></label>
-      <textarea rows={3} value={form.serviceDescription} onChange={(e) => onSet("serviceDescription", e.target.value)}
-        placeholder="Describe the service needed in detail…" className={textareaClass} disabled={!canEdit} />
-    </div>
-  )
-
-  return null
-}
-
 /* ── Props ──────────────────────────────────────────────── */
 type RequestModalProps = {
   isOpen: boolean
   onClose: () => void
-  /** May return a Promise; modal shows loading state while it resolves. */
   onSave: (form: FormState) => void | Promise<void>
   request?: ServiceRequest | null
-  /** Admin-only: list of clients for the "assign to client" selector. */
   clients?: { id: string; name: string }[]
 }
 
 export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }: RequestModalProps) {
-  const { role }   = useRole()
-  const { products } = useProducts()
-  const isMockMode   = useIsMockMode()
+  const { role }      = useRole()
+  const { products }  = useProducts()
+  const isMockMode    = useIsMockMode()
 
-  const [form,           setFormState]    = useState<FormState>(emptyForm())
-  const [error,          setError]        = useState("")
-  const [saveError,      setSaveError]    = useState("")
-  const [saving,         setSaving]       = useState(false)
-  const [estimatedPrice, setEstimatedPrice] = useState<number | null>(null)
+  const [form,     setFormState] = useState<FormState>(emptyForm())
+  const [error,    setError]     = useState("")
+  const [saveError, setSaveError] = useState("")
+  const [saving,   setSaving]    = useState(false)
+  const [fetchedServiceTypes, setFetchedServiceTypes] = useState<AvailableServiceType[]>([])
+
+  const mockServiceTypes = useMemo<AvailableServiceType[]>(
+    () => SERVICE_TYPES.map((name) => ({ id: name, name, visibleToCustomers: true, pricingRules: [] })),
+    []
+  )
+  const availServiceTypes = isMockMode ? mockServiceTypes : fetchedServiceTypes
 
   const [prevKey, setPrevKey] = useState<string>("")
   const currentKey = `${isOpen}|${request?.id ?? "__new__"}`
@@ -233,13 +183,20 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
   if (prevKey !== currentKey) {
     setPrevKey(currentKey)
     if (isOpen) {
-      setEstimatedPrice(null)
       setFormState(request ? {
         clientId:           "",
         productId:          request.productId,
         quantity:           request.quantity,
         useAllAvailable:    false,
-        service:            request.service,
+        services:
+          request.services?.length > 0
+            ? request.services.map((s) => ({
+                rowId:         uid(),
+                serviceTypeId: s.serviceTypeId ?? null,
+                serviceName:   s.serviceName,
+                notes:         s.notes,
+              }))
+            : [{ rowId: uid(), serviceTypeId: null, serviceName: request.service || "", notes: "" }],
         files:              [...request.files],
         notes:              request.notes,
         status:             request.status,
@@ -259,16 +216,20 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
     }
   }
 
-  const isEdit    = !!request
-  const isAdmin   = role === "admin"
-  const activeProducts   = products.filter((p) => p.status === "Active")
-  const selectedProduct  = activeProducts.find((p) => p.id === form.productId)
+  // Fetch available service types from the server when the modal opens (Supabase mode only)
+  useEffect(() => {
+    if (!isOpen || isMockMode) return
+    listAvailableServiceTypes().then(setFetchedServiceTypes).catch(() => {})
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen])
+
+  const isEdit   = !!request
+  const isAdmin  = role === "admin"
+  const activeProducts  = products.filter((p) => p.status === "Active")
+  const selectedProduct = activeProducts.find((p) => p.id === form.productId)
     ?? products.find((p) => p.id === form.productId)
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
-    if (key === "service" || key === "quantity" || key === "useAllAvailable") {
-      setEstimatedPrice(null)
-    }
     setFormState((f) => ({ ...f, [key]: value }))
   }
 
@@ -277,15 +238,32 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
       ? selectedProduct.available
       : form.quantity
 
-  // Look up pricing rule whenever service + quantity are both set
-  useEffect(() => {
-    if (!form.service || effectiveQuantity <= 0 || isMockMode) return
-    lookupPricingRule(form.service, effectiveQuantity)
-      .then((r) => setEstimatedPrice(r ? parseFloat((r.pricePerUnit * effectiveQuantity).toFixed(2)) : null))
-      .catch(() => setEstimatedPrice(null))
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [form.service, effectiveQuantity])
+  /* ── Service row management ─────────────────────────────── */
+  function addServiceRow() {
+    setFormState((f) => ({
+      ...f,
+      services: [...f.services, { rowId: uid(), serviceTypeId: null, serviceName: "", notes: "" }],
+    }))
+  }
 
+  function removeServiceRow(idx: number) {
+    setFormState((f) => ({
+      ...f,
+      services: f.services.filter((_, i) => i !== idx),
+    }))
+  }
+
+  function updateServiceRowName(idx: number, serviceName: string) {
+    const found = availServiceTypes.find((t) => t.name === serviceName)
+    setFormState((f) => ({
+      ...f,
+      services: f.services.map((row, i) =>
+        i === idx ? { ...row, serviceName, serviceTypeId: found?.id ?? null } : row
+      ),
+    }))
+  }
+
+  /* ── Files ──────────────────────────────────────────────── */
   function addFiles(newFiles: ServiceFile[]) {
     setFormState((f) => ({ ...f, files: [...f.files, ...newFiles] }))
   }
@@ -293,11 +271,16 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
     setFormState((f) => ({ ...f, files: f.files.filter((x) => x.id !== id) }))
   }
 
+  /* ── Submit ─────────────────────────────────────────────── */
   async function handleSubmit(e: { preventDefault(): void }) {
     e.preventDefault()
     if (!form.productId)        { setError("Select a product."); return }
-    if (!form.service)          { setError("Select a service type."); return }
     if (effectiveQuantity <= 0) { setError("Enter a quantity greater than 0."); return }
+    const validServices = form.services.filter((s) => s.serviceName.trim())
+    if (!validServices.length)  { setError("Select at least one service."); return }
+    if (validServices.some((s) => s.serviceName === "Other") && !form.serviceDescription.trim()) {
+      setError("Provide a description for the Other service."); return
+    }
     setError("")
     setSaveError("")
     setSaving(true)
@@ -310,8 +293,27 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
     }
   }
 
-  const canEdit         = isAdmin || !isEdit || request?.status === "New"
+  const canEdit        = isAdmin || !isEdit || request?.status === "New"
   const showClientField = isAdmin && !isEdit && clients.length > 0
+
+  /* ── Derived for service-specific fields ────────────────── */
+  const selectedServiceNames = new Set(form.services.map((s) => s.serviceName).filter(Boolean))
+  const needsLabels  = selectedServiceNames.has("FBA Prep") || selectedServiceNames.has("Labeling")
+  const needsFBM     = selectedServiceNames.has("FBM Fulfillment")
+  const needsBundling = selectedServiceNames.has("Bundling")
+  const needsOther   = selectedServiceNames.has("Other")
+  const hasServiceFields = needsLabels || needsFBM || needsBundling || needsOther
+
+  /* ── Price rows for estimate section ───────────────────── */
+  const pricedRows = form.services
+    .filter((s) => s.serviceName)
+    .map((s) => ({
+      name:  s.serviceName,
+      price: computeRowPrice(s.serviceName, s.serviceTypeId, effectiveQuantity, availServiceTypes),
+    }))
+  const pricedCount    = pricedRows.filter((r) => r.price !== null).length
+  const totalEstimate  = pricedRows.reduce((sum, r) => sum + (r.price ?? 0), 0)
+  const showEstimate   = !isMockMode && effectiveQuantity > 0 && pricedCount > 0
 
   return (
     <Modal
@@ -432,38 +434,176 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
           </div>
         </div>
 
-        {/* Service */}
+        {/* Services */}
         <div>
-          <label className={labelClass}>Service Type <span className="text-red-500">*</span></label>
-          <select
-            value={form.service}
-            onChange={(e) => set("service", e.target.value as ServiceType | "")}
-            className={inputClass}
-            disabled={!canEdit}
-          >
-            <option value="">Select service…</option>
-            {SERVICE_TYPES.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-          {estimatedPrice !== null && (
-            <p className="mt-1.5 text-[12px] font-medium text-blue-600">
-              Estimated: ${estimatedPrice.toFixed(2)}
-            </p>
-          )}
-          {estimatedPrice === null && form.service && effectiveQuantity > 0 && !isMockMode && (
-            <p className="mt-1.5 text-[12px] text-gray-400">
-              No pricing rule found — price will be set by admin.
-            </p>
-          )}
-          {form.service && (
-            <ServiceFields
-              service={form.service}
-              form={form}
-              onSet={set}
-              onAddFiles={addFiles}
-              canEdit={canEdit}
-            />
+          <label className={labelClass}>Services <span className="text-red-500">*</span></label>
+          <div className="space-y-2">
+            {form.services.map((row, idx) => {
+              const rowPrice = computeRowPrice(row.serviceName, row.serviceTypeId, effectiveQuantity, availServiceTypes)
+              const otherSelectedNames = new Set(
+                form.services.filter((_, i) => i !== idx).map((s) => s.serviceName).filter(Boolean)
+              )
+              return (
+                <div key={row.rowId}>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={row.serviceName}
+                      onChange={(e) => updateServiceRowName(idx, e.target.value)}
+                      className={inputClass}
+                      disabled={!canEdit || (availServiceTypes.length === 0 && !isMockMode)}
+                    >
+                      <option value="">
+                        {availServiceTypes.length === 0 && !isMockMode ? "Loading…" : "Select service…"}
+                      </option>
+                      {availServiceTypes.map((s) => (
+                        <option key={s.id} value={s.name} disabled={otherSelectedNames.has(s.name)}>
+                          {s.name}
+                        </option>
+                      ))}
+                    </select>
+                    {form.services.length > 1 && canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => removeServiceRow(idx)}
+                        className="p-1.5 text-gray-400 hover:text-red-500 shrink-0 rounded-md hover:bg-red-50 transition-colors"
+                        title="Remove service"
+                      >
+                        <X className="size-4" />
+                      </button>
+                    )}
+                  </div>
+                  {row.serviceName && effectiveQuantity > 0 && !isMockMode && (
+                    <p className="mt-1 text-[12px]">
+                      {rowPrice !== null ? (
+                        <span className="text-blue-600 font-medium">
+                          {row.serviceName}: {effectiveQuantity.toLocaleString()} × ${(rowPrice / effectiveQuantity).toFixed(2)} = ${rowPrice.toFixed(2)}
+                        </span>
+                      ) : (
+                        <span className="text-gray-400">
+                          No pricing rule found — price will be set by admin.
+                        </span>
+                      )}
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+
+          {canEdit && (
+            <button
+              type="button"
+              onClick={addServiceRow}
+              className="mt-2 flex items-center gap-1.5 text-[12px] font-medium text-blue-600 hover:text-blue-700 transition-colors"
+            >
+              <Plus className="size-3.5" />
+              Add Another Service
+            </button>
           )}
         </div>
+
+        {/* Total estimate */}
+        {showEstimate && (
+          <div className="p-3 bg-gray-50 rounded-lg border border-gray-100">
+            <p className={labelClass}>Estimate</p>
+            <div className="space-y-1">
+              {pricedRows.map((r) => {
+                if (!r.price) return null
+                return (
+                  <div key={r.name} className="flex items-center justify-between text-[12px] text-gray-600">
+                    <span>{r.name}</span>
+                    <span className="tabular-nums">
+                      {effectiveQuantity.toLocaleString()} × ${(r.price / effectiveQuantity).toFixed(2)} = ${r.price.toFixed(2)}
+                    </span>
+                  </div>
+                )
+              })}
+              {pricedCount > 1 && (
+                <div className="flex items-center justify-between text-[12px] font-semibold text-gray-800 border-t border-gray-200 mt-1.5 pt-1.5">
+                  <span>Total estimate</span>
+                  <span className="tabular-nums">${totalEstimate.toFixed(2)}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Service-specific fields */}
+        {hasServiceFields && (
+          <div className="p-4 bg-gray-50 rounded-lg border border-gray-100 space-y-4">
+            {needsLabels && (
+              <div className="space-y-3">
+                <p className={labelClass}>Labels &amp; Prep</p>
+                <div className="flex flex-wrap gap-2">
+                  <UploadBtn label="Upload FNSKU Label" onAdd={addFiles} />
+                  <UploadBtn label="Upload Box Label" onAdd={addFiles} optional />
+                </div>
+                {selectedServiceNames.has("FBA Prep") && (
+                  <div>
+                    <label className={labelClass}>Prep Notes</label>
+                    <textarea rows={2} value={form.prepNotes}
+                      onChange={(e) => set("prepNotes", e.target.value)}
+                      placeholder="e.g. poly bag, bubble wrap, desiccant…"
+                      className={textareaClass} disabled={!canEdit} />
+                  </div>
+                )}
+                {selectedServiceNames.has("Labeling") && (
+                  <div>
+                    <label className={labelClass}>Label Placement Notes</label>
+                    <textarea rows={2} value={form.placementNotes}
+                      onChange={(e) => set("placementNotes", e.target.value)}
+                      placeholder="e.g. apply on bottom, avoid seams…"
+                      className={textareaClass} disabled={!canEdit} />
+                  </div>
+                )}
+              </div>
+            )}
+
+            {needsFBM && (
+              <div className="space-y-3">
+                <p className={labelClass}>FBM Details</p>
+                <UploadBtn label="Upload Shipping Label" onAdd={addFiles} />
+                <div>
+                  <label className={labelClass}>Order / Recipient Notes</label>
+                  <textarea rows={2} value={form.orderNotes}
+                    onChange={(e) => set("orderNotes", e.target.value)}
+                    placeholder="Recipient name, special instructions…"
+                    className={textareaClass} disabled={!canEdit} />
+                </div>
+              </div>
+            )}
+
+            {needsBundling && (
+              <div className="space-y-3">
+                <p className={labelClass}>Bundling Details</p>
+                <div>
+                  <label className={labelClass}>Bundle Instructions</label>
+                  <textarea rows={2} value={form.bundleInstructions}
+                    onChange={(e) => set("bundleInstructions", e.target.value)}
+                    placeholder="How should units be bundled?"
+                    className={textareaClass} disabled={!canEdit} />
+                </div>
+                <div>
+                  <label className={labelClass}>Units per Bundle</label>
+                  <input type="number" min="1" value={form.unitsPerBundle}
+                    onChange={(e) => set("unitsPerBundle", Number(e.target.value))}
+                    className="w-28 px-3 py-2 text-[13px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    disabled={!canEdit} />
+                </div>
+              </div>
+            )}
+
+            {needsOther && (
+              <div>
+                <label className={labelClass}>Service Description <span className="text-red-500">*</span></label>
+                <textarea rows={3} value={form.serviceDescription}
+                  onChange={(e) => set("serviceDescription", e.target.value)}
+                  placeholder="Describe the service needed in detail…"
+                  className={textareaClass} disabled={!canEdit} />
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Attachments */}
         <div>
