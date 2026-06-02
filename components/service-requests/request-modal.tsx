@@ -1,9 +1,10 @@
 "use client"
 
-import { useRef, useState } from "react"
+import { useRef, useState, useEffect } from "react"
 import { FileText, Upload, X, AlertCircle } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
-import { useProducts, useRole } from "@/components/layout/app-shell"
+import { useProducts, useRole, useIsMockMode } from "@/components/layout/app-shell"
+import { lookupPricingRule } from "@/app/settings/actions"
 import { SERVICE_TYPES } from "@/lib/types"
 import type { ServiceFile, ServiceRequest, ServiceStatus, ServiceType } from "@/lib/types"
 
@@ -218,11 +219,13 @@ type RequestModalProps = {
 export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }: RequestModalProps) {
   const { role }   = useRole()
   const { products } = useProducts()
+  const isMockMode   = useIsMockMode()
 
-  const [form,      setFormState] = useState<FormState>(emptyForm())
-  const [error,     setError]     = useState("")
-  const [saveError, setSaveError] = useState("")
-  const [saving,    setSaving]    = useState(false)
+  const [form,           setFormState]    = useState<FormState>(emptyForm())
+  const [error,          setError]        = useState("")
+  const [saveError,      setSaveError]    = useState("")
+  const [saving,         setSaving]       = useState(false)
+  const [estimatedPrice, setEstimatedPrice] = useState<number | null>(null)
 
   const [prevKey, setPrevKey] = useState<string>("")
   const currentKey = `${isOpen}|${request?.id ?? "__new__"}`
@@ -230,6 +233,7 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
   if (prevKey !== currentKey) {
     setPrevKey(currentKey)
     if (isOpen) {
+      setEstimatedPrice(null)
       setFormState(request ? {
         clientId:           "",
         productId:          request.productId,
@@ -262,6 +266,9 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
     ?? products.find((p) => p.id === form.productId)
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
+    if (key === "service" || key === "quantity" || key === "useAllAvailable") {
+      setEstimatedPrice(null)
+    }
     setFormState((f) => ({ ...f, [key]: value }))
   }
 
@@ -269,6 +276,15 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
     form.useAllAvailable && selectedProduct
       ? selectedProduct.available
       : form.quantity
+
+  // Look up pricing rule whenever service + quantity are both set
+  useEffect(() => {
+    if (!form.service || effectiveQuantity <= 0 || isMockMode) return
+    lookupPricingRule(form.service, effectiveQuantity)
+      .then((r) => setEstimatedPrice(r ? parseFloat((r.pricePerUnit * effectiveQuantity).toFixed(2)) : null))
+      .catch(() => setEstimatedPrice(null))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [form.service, effectiveQuantity])
 
   function addFiles(newFiles: ServiceFile[]) {
     setFormState((f) => ({ ...f, files: [...f.files, ...newFiles] }))
@@ -428,6 +444,16 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
             <option value="">Select service…</option>
             {SERVICE_TYPES.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
+          {estimatedPrice !== null && (
+            <p className="mt-1.5 text-[12px] font-medium text-blue-600">
+              Estimated: ${estimatedPrice.toFixed(2)}
+            </p>
+          )}
+          {estimatedPrice === null && form.service && effectiveQuantity > 0 && !isMockMode && (
+            <p className="mt-1.5 text-[12px] text-gray-400">
+              No pricing rule found — price will be set by admin.
+            </p>
+          )}
           {form.service && (
             <ServiceFields
               service={form.service}

@@ -3,9 +3,9 @@
 import { useState, useRef, useCallback, useEffect } from "react"
 import {
   Building2, Truck, Wrench, FileText, Users,
-  ChevronUp, ChevronDown, Pencil, Trash2, Plus, Check, X,
+  ChevronUp, ChevronDown, ChevronRight, Pencil, Trash2, Plus, Check, X,
   ImagePlus, GripVertical, Settings, ShieldCheck, Mail,
-  KeyRound, Eye, EyeOff, AlertTriangle, AlertCircle,
+  KeyRound, Eye, EyeOff, AlertTriangle, AlertCircle, Tag,
 } from "lucide-react"
 import { useRole, useIsMockMode } from "@/components/layout/app-shell"
 import { ConfirmModal }           from "@/components/ui/confirm-modal"
@@ -22,6 +22,8 @@ import {
   deleteServiceType,
   checkServiceTypeUsage,
   reorderServiceTypes,
+  upsertPricingRule,
+  deletePricingRule,
   saveInvoiceSettings,
   saveUserSettings,
   type SettingsCarrier,
@@ -29,6 +31,7 @@ import {
   type SettingsCompany,
   type SettingsInvoice,
   type SettingsUsers,
+  type PricingRule,
 } from "@/app/settings/actions"
 
 /* ─────────────────────────────────────────────────────────
@@ -395,59 +398,320 @@ function CarrierList({
   )
 }
 
+function RuleForm({ state, onSet, onSave, onCancel, savingKey }: {
+  state: RuleEditState
+  onSet: (patch: Partial<RuleEditState>) => void
+  onSave: () => void
+  onCancel: () => void
+  savingKey: string | null
+}) {
+  const inputCls = "px-2 py-0.5 text-[12px] border border-gray-200 rounded focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+  return (
+    <div className="flex items-center gap-2 flex-wrap py-1.5 px-2 bg-blue-50 rounded-lg border border-blue-200">
+      <div className="flex items-center gap-1">
+        <label className="text-[11px] text-gray-500 shrink-0">Min</label>
+        <input
+          autoFocus type="number" min={0} value={state.minQty}
+          onChange={(e) => onSet({ minQty: e.target.value })}
+          onKeyDown={(e) => { if (e.key === "Enter") onSave(); if (e.key === "Escape") onCancel() }}
+          className={cn(inputCls, "w-16 text-right")}
+        />
+      </div>
+      <div className="flex items-center gap-1">
+        <label className="text-[11px] text-gray-500 shrink-0">Max</label>
+        <input
+          type="number" min={0} value={state.maxQty} placeholder="∞"
+          onChange={(e) => onSet({ maxQty: e.target.value })}
+          onKeyDown={(e) => { if (e.key === "Enter") onSave(); if (e.key === "Escape") onCancel() }}
+          className={cn(inputCls, "w-16 text-right")}
+        />
+      </div>
+      <div className="flex items-center gap-1">
+        <label className="text-[11px] text-gray-500 shrink-0">$</label>
+        <input
+          type="number" min={0} step={0.01} value={state.pricePerUnit}
+          onChange={(e) => onSet({ pricePerUnit: e.target.value })}
+          onKeyDown={(e) => { if (e.key === "Enter") onSave(); if (e.key === "Escape") onCancel() }}
+          className={cn(inputCls, "w-20 text-right")}
+        />
+        <span className="text-[11px] text-gray-400 shrink-0">/unit</span>
+      </div>
+      <input
+        type="text" value={state.label} placeholder="Label (optional)"
+        onChange={(e) => onSet({ label: e.target.value })}
+        onKeyDown={(e) => { if (e.key === "Enter") onSave(); if (e.key === "Escape") onCancel() }}
+        className={cn(inputCls, "flex-1 min-w-[100px]")}
+      />
+      <button onClick={onSave} disabled={!!savingKey}
+        className="flex size-6 items-center justify-center rounded text-green-600 hover:bg-green-50 disabled:opacity-50 shrink-0">
+        <Check className="size-3.5" />
+      </button>
+      <button onClick={onCancel}
+        className="flex size-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100 shrink-0">
+        <X className="size-3.5" />
+      </button>
+    </div>
+  )
+}
+
+/* ─────────────────────────────────────────────────────────
+   PricingRuleSubList
+───────────────────────────────────────────────────────── */
+type RuleEditState = { minQty: string; maxQty: string; pricePerUnit: string; label: string }
+const emptyRuleState = (): RuleEditState => ({ minQty: "1", maxQty: "", pricePerUnit: "0.00", label: "" })
+
+function validateRule(
+  s: RuleEditState,
+  existing: PricingRule[],
+  excludeId?: string
+): string | null {
+  const min   = parseInt(s.minQty)
+  const max   = s.maxQty.trim() ? parseInt(s.maxQty) : null
+  const price = parseFloat(s.pricePerUnit)
+  if (!s.minQty.trim() || isNaN(min) || min < 0)   return "Min quantity is required (0 or more)."
+  if (!s.pricePerUnit.trim() || isNaN(price) || price < 0) return "Price per unit is required (0 or more)."
+  if (max !== null && max < min)                    return "Max quantity must be ≥ min quantity."
+  const others = excludeId ? existing.filter((r) => r.id !== excludeId) : existing
+  const newMax = max ?? Infinity
+  if (others.some((r) => { const rMax = r.maxQty ?? Infinity; return min <= rMax && r.minQty <= newMax }))
+    return "This range overlaps with an existing pricing rule."
+  return null
+}
+
+function ruleDisplay(r: PricingRule) {
+  const range = r.maxQty !== null ? `${r.minQty}–${r.maxQty}` : `${r.minQty}+`
+  return `${range} units · $${r.pricePerUnit.toFixed(2)}/unit`
+}
+
+function PricingRuleSubList({
+  serviceTypeId, initialRules, isMockMode,
+}: {
+  serviceTypeId: string; initialRules: PricingRule[]; isMockMode: boolean
+}) {
+  const [rules,       setRules]       = useState<PricingRule[]>(initialRules)
+  const [editingId,   setEditingId]   = useState<string | null>(null)
+  const [editState,   setEditState]   = useState<RuleEditState>(emptyRuleState())
+  const [adding,      setAdding]      = useState(false)
+  const [addState,    setAddState]    = useState<RuleEditState>(emptyRuleState())
+  const [ruleError,   setRuleError]   = useState<string | null>(null)
+  const [saving,      setSaving]      = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<PricingRule | null>(null)
+  const [deleting,    setDeleting]    = useState(false)
+
+  function startEdit(rule: PricingRule) {
+    setEditingId(rule.id)
+    setEditState({
+      minQty:       String(rule.minQty),
+      maxQty:       rule.maxQty !== null ? String(rule.maxQty) : "",
+      pricePerUnit: rule.pricePerUnit.toFixed(2),
+      label:        rule.label ?? "",
+    })
+    setRuleError(null)
+  }
+
+  async function commitEdit(rule: PricingRule) {
+    const err = validateRule(editState, rules, rule.id)
+    if (err) { setRuleError(err); return }
+    const minQty       = parseInt(editState.minQty)
+    const maxQty       = editState.maxQty.trim() ? parseInt(editState.maxQty) : null
+    const pricePerUnit = parseFloat(editState.pricePerUnit)
+    if (isMockMode) {
+      setRules((prev) => prev.map((r) => r.id === rule.id
+        ? { ...r, minQty, maxQty, pricePerUnit, label: editState.label.trim() || null }
+        : r
+      ).sort((a, b) => a.minQty - b.minQty))
+      setEditingId(null)
+      return
+    }
+    setSaving(rule.id)
+    try {
+      const updated = await upsertPricingRule({
+        id: rule.id, serviceTypeId, minQty, maxQty, pricePerUnit,
+        label: editState.label.trim() || null, sortOrder: rule.sortOrder,
+      })
+      setRules((prev) => prev.map((r) => r.id === rule.id ? updated : r).sort((a, b) => a.minQty - b.minQty))
+      setEditingId(null)
+    } catch (err) {
+      setRuleError(err instanceof Error ? err.message : "Failed to save rule.")
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  async function commitAdd() {
+    const err = validateRule(addState, rules)
+    if (err) { setRuleError(err); return }
+    const minQty       = parseInt(addState.minQty)
+    const maxQty       = addState.maxQty.trim() ? parseInt(addState.maxQty) : null
+    const pricePerUnit = parseFloat(addState.pricePerUnit)
+    if (isMockMode) {
+      const newRule: PricingRule = {
+        id: `mock-${Date.now()}`, serviceTypeId, minQty, maxQty, pricePerUnit,
+        label: addState.label.trim() || null, sortOrder: minQty,
+      }
+      setRules((prev) => [...prev, newRule].sort((a, b) => a.minQty - b.minQty))
+      setAdding(false); setAddState(emptyRuleState())
+      return
+    }
+    setSaving("new")
+    try {
+      const created = await upsertPricingRule({
+        serviceTypeId, minQty, maxQty, pricePerUnit,
+        label: addState.label.trim() || null, sortOrder: minQty,
+      })
+      setRules((prev) => [...prev, created].sort((a, b) => a.minQty - b.minQty))
+      setAdding(false); setAddState(emptyRuleState())
+    } catch (err) {
+      setRuleError(err instanceof Error ? err.message : "Failed to add rule.")
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  async function confirmRuleDelete() {
+    if (!deleteTarget) return
+    if (isMockMode) {
+      setRules((prev) => prev.filter((r) => r.id !== deleteTarget.id))
+      setDeleteTarget(null)
+      return
+    }
+    setDeleting(true)
+    try {
+      await deletePricingRule(deleteTarget.id)
+      setRules((prev) => prev.filter((r) => r.id !== deleteTarget.id))
+      setDeleteTarget(null)
+    } catch {
+      // silently keep rule on delete failure
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+
+
+  return (
+    <div className="mt-1 ml-8 space-y-1 border-l-2 border-gray-100 pl-3">
+      {ruleError && (
+        <div className="flex items-start gap-1.5 rounded-lg bg-red-50 border border-red-100 px-2.5 py-1.5">
+          <AlertCircle className="size-3 text-red-500 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-red-600">{ruleError}</p>
+        </div>
+      )}
+
+      {rules.length === 0 && !adding && (
+        <p className="text-[12px] text-gray-400 py-1">No pricing rules — add one below.</p>
+      )}
+
+      {rules.map((rule) =>
+        editingId === rule.id ? (
+          <RuleForm
+            key={rule.id}
+            state={editState}
+            onSet={(p) => setEditState((s) => ({ ...s, ...p }))}
+            onSave={() => commitEdit(rule)}
+            onCancel={() => { setEditingId(null); setRuleError(null) }}
+            savingKey={saving}
+          />
+        ) : (
+          <div key={rule.id} className="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-gray-50 group">
+            <Tag className="size-3 text-gray-300 shrink-0" />
+            <span className="flex-1 text-[12px] text-gray-700 font-mono">{ruleDisplay(rule)}</span>
+            {rule.label && (
+              <span className="text-[11px] text-gray-400 truncate max-w-[100px]">{rule.label}</span>
+            )}
+            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+              <button onClick={() => { startEdit(rule); setRuleError(null) }}
+                className="flex size-5 items-center justify-center rounded text-gray-400 hover:text-blue-600 hover:bg-blue-50">
+                <Pencil className="size-3" />
+              </button>
+              <button onClick={() => { setDeleteTarget(rule); setRuleError(null) }}
+                className="flex size-5 items-center justify-center rounded text-gray-400 hover:text-red-500 hover:bg-red-50">
+                <Trash2 className="size-3" />
+              </button>
+            </div>
+          </div>
+        )
+      )}
+
+      {adding ? (
+        <RuleForm
+          state={addState}
+          onSet={(p) => setAddState((s) => ({ ...s, ...p }))}
+          onSave={commitAdd}
+          onCancel={() => { setAdding(false); setAddState(emptyRuleState()); setRuleError(null) }}
+          savingKey={saving}
+        />
+      ) : (
+        <button
+          onClick={() => { setAdding(true); setRuleError(null) }}
+          className="flex items-center gap-1 text-[12px] text-blue-600 hover:text-blue-700 py-0.5"
+        >
+          <Plus className="size-3" />
+          Add Pricing Rule
+        </button>
+      )}
+
+      <ConfirmModal
+        isOpen={!!deleteTarget}
+        onClose={() => !deleting && setDeleteTarget(null)}
+        onConfirm={confirmRuleDelete}
+        title="Delete pricing rule?"
+        message={`Remove the rule "${deleteTarget ? ruleDisplay(deleteTarget) : ""}"?`}
+        confirmLabel={deleting ? "Deleting…" : "Delete Rule"}
+        variant="danger"
+      />
+    </div>
+  )
+}
+
 /* ─────────────────────────────────────────────────────────
    ServiceList
 ───────────────────────────────────────────────────────── */
-type ServiceEditState = {
-  name: string
-  price: string
-  visibleToCustomers: boolean
-}
+type ServiceEditState = { name: string; visibleToCustomers: boolean }
 
 function ServiceList({
   initial, isMockMode,
 }: {
   initial: SettingsServiceType[]; isMockMode: boolean
 }) {
-  const [items,       setItems]       = useState<SettingsServiceType[]>(initial)
-  const [editingId,   setEditingId]   = useState<string | null>(null)
-  const [editState,   setEditState]   = useState<ServiceEditState>({ name: "", price: "0", visibleToCustomers: true })
-  const [adding,      setAdding]      = useState(false)
-  const [addState,    setAddState]    = useState<ServiceEditState>({ name: "", price: "0", visibleToCustomers: true })
-  const [saving,      setSaving]      = useState<string | null>(null)
-  const [error,       setError]       = useState<string | null>(null)
+  const [items,        setItems]       = useState<SettingsServiceType[]>(initial)
+  const [editingId,    setEditingId]   = useState<string | null>(null)
+  const [editState,    setEditState]   = useState<ServiceEditState>({ name: "", visibleToCustomers: true })
+  const [adding,       setAdding]      = useState(false)
+  const [addName,      setAddName]     = useState("")
+  const [addVisible,   setAddVisible]  = useState(true)
+  const [expandedId,   setExpandedId]  = useState<string | null>(null)
+  const [saving,       setSaving]      = useState<string | null>(null)
+  const [error,        setError]       = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<SettingsServiceType | null>(null)
-  const [deleteMsg,   setDeleteMsg]   = useState("")
-  const [deleting,    setDeleting]    = useState(false)
-  const [checkingId,  setCheckingId]  = useState<string | null>(null)
+  const [deleteMsg,    setDeleteMsg]   = useState("")
+  const [deleting,     setDeleting]    = useState(false)
+  const [checkingId,   setCheckingId]  = useState<string | null>(null)
 
   function startEdit(item: SettingsServiceType) {
     setEditingId(item.id)
-    setEditState({ name: item.name, price: String(item.price), visibleToCustomers: item.visibleToCustomers })
+    setEditState({ name: item.name, visibleToCustomers: item.visibleToCustomers })
     setError(null)
   }
 
   async function commitEdit(item: SettingsServiceType) {
-    const name  = editState.name.trim()
-    const price = Math.max(0, parseFloat(editState.price) || 0)
-    if (!name) { cancelEdit(); return }
+    const name = editState.name.trim()
+    if (!name) { setEditingId(null); return }
     if (isMockMode) {
-      setItems((prev) =>
-        prev.map((i) => i.id === item.id
-          ? { ...i, name, price, visibleToCustomers: editState.visibleToCustomers }
-          : i)
-      )
+      setItems((prev) => prev.map((i) => i.id === item.id
+        ? { ...i, name, visibleToCustomers: editState.visibleToCustomers }
+        : i
+      ))
       setEditingId(null)
       return
     }
     setSaving(item.id)
     try {
       const updated = await upsertServiceType({
-        id: item.id, name, price,
-        visibleToCustomers: editState.visibleToCustomers,
-        sortOrder: item.sortOrder,
+        id: item.id, name, price: item.price,
+        visibleToCustomers: editState.visibleToCustomers, sortOrder: item.sortOrder,
       })
-      setItems((prev) => prev.map((i) => i.id === item.id ? updated : i))
+      setItems((prev) => prev.map((i) => i.id === item.id ? { ...updated, pricingRules: item.pricingRules } : i))
       setEditingId(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save service.")
@@ -471,27 +735,24 @@ function ServiceList({
   }
 
   async function commitAdd() {
-    const name  = addState.name.trim()
-    const price = Math.max(0, parseFloat(addState.price) || 0)
-    if (!name) { setAdding(false); setAddState({ name: "", price: "0", visibleToCustomers: true }); return }
+    const name = addName.trim()
+    if (!name) { setAdding(false); setAddName(""); return }
     if (isMockMode) {
       setItems((prev) => [
         ...prev,
-        { id: `mock-${Date.now()}`, name, price, visibleToCustomers: addState.visibleToCustomers, isActive: true, sortOrder: prev.length + 1 },
+        { id: `mock-${Date.now()}`, name, price: 0, visibleToCustomers: addVisible,
+          isActive: true, sortOrder: prev.length + 1, pricingRules: [] },
       ])
-      setAdding(false)
-      setAddState({ name: "", price: "0", visibleToCustomers: true })
+      setAdding(false); setAddName(""); setAddVisible(true)
       return
     }
     setSaving("new")
     try {
       const created = await upsertServiceType({
-        name, price, visibleToCustomers: addState.visibleToCustomers,
-        sortOrder: items.length + 1,
+        name, price: 0, visibleToCustomers: addVisible, sortOrder: items.length + 1,
       })
-      setItems((prev) => [...prev, created])
-      setAdding(false)
-      setAddState({ name: "", price: "0", visibleToCustomers: true })
+      setItems((prev) => [...prev, { ...created, pricingRules: [] }])
+      setAdding(false); setAddName(""); setAddVisible(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add service.")
     } finally {
@@ -509,10 +770,9 @@ function ServiceList({
     setCheckingId(item.id)
     try {
       const count = await checkServiceTypeUsage(item.id)
-      let msg = `Permanently delete "${item.name}"? This cannot be undone.`
-      if (count > 0) {
-        msg = `This service is used in ${count} existing request${count > 1 ? "s" : ""}. Deleting it may affect historical records.\n\nDelete anyway?`
-      }
+      const msg = count > 0
+        ? `This service is used in ${count} existing request${count > 1 ? "s" : ""}. Deleting it may affect historical records.\n\nDelete anyway?`
+        : `Permanently delete "${item.name}"? This cannot be undone.`
       setDeleteMsg(msg)
       setDeleteTarget(item)
     } catch {
@@ -526,15 +786,12 @@ function ServiceList({
   async function confirmDelete() {
     if (!deleteTarget) return
     const id = deleteTarget.id
-    if (isMockMode) {
-      setItems((prev) => prev.filter((i) => i.id !== id))
-      setDeleteTarget(null)
-      return
-    }
+    if (isMockMode) { setItems((prev) => prev.filter((i) => i.id !== id)); setDeleteTarget(null); return }
     setDeleting(true)
     try {
       await deleteServiceType(id)
       setItems((prev) => prev.filter((i) => i.id !== id))
+      if (expandedId === id) setExpandedId(null)
       setDeleteTarget(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete service.")
@@ -543,51 +800,38 @@ function ServiceList({
     }
   }
 
-  function ServiceRow({ item, idx }: { item: SettingsServiceType; idx: number }) {
+  function renderServiceRow(item: SettingsServiceType, idx: number) {
+    const isExpanded = expandedId === item.id
+    const ruleCount  = item.pricingRules.length
+
     if (editingId === item.id) {
       return (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50">
+          <button className="size-4 shrink-0" />
           <GripVertical className="size-3.5 text-blue-200 shrink-0" />
           <input
-            autoFocus
-            value={editState.name}
+            autoFocus value={editState.name}
             onChange={(e) => setEditState((s) => ({ ...s, name: e.target.value }))}
-            onKeyDown={(e) => { if (e.key === "Escape") cancelEdit() }}
+            onKeyDown={(e) => { if (e.key === "Enter") commitEdit(item); if (e.key === "Escape") cancelEdit() }}
             placeholder="Service name"
             className="flex-1 min-w-0 text-[13px] bg-white border border-blue-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
           />
-          <div className="flex items-center gap-1 shrink-0">
-            <span className="text-[13px] text-gray-500">$</span>
-            <input
-              type="number"
-              min={0}
-              step={0.01}
-              value={editState.price}
-              onChange={(e) => setEditState((s) => ({ ...s, price: e.target.value }))}
-              className="w-20 text-[13px] bg-white border border-blue-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
-            />
-          </div>
           <button
             type="button"
             onClick={() => setEditState((s) => ({ ...s, visibleToCustomers: !s.visibleToCustomers }))}
             title={editState.visibleToCustomers ? "Visible to clients" : "Hidden from clients"}
-            className={cn(
-              "flex size-6 items-center justify-center rounded transition-colors shrink-0",
-              editState.visibleToCustomers
-                ? "text-blue-600 hover:bg-blue-100"
-                : "text-gray-300 hover:bg-gray-100"
+            className={cn("flex size-6 items-center justify-center rounded transition-colors shrink-0",
+              editState.visibleToCustomers ? "text-blue-600 hover:bg-blue-100" : "text-gray-300 hover:bg-gray-100"
             )}
           >
             {editState.visibleToCustomers ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
           </button>
-          <button
-            onClick={() => commitEdit(item)}
-            disabled={saving === item.id}
-            className="flex size-6 items-center justify-center rounded text-green-600 hover:bg-green-50 disabled:opacity-50"
-          >
+          <button onClick={() => commitEdit(item)} disabled={saving === item.id}
+            className="flex size-6 items-center justify-center rounded text-green-600 hover:bg-green-50 disabled:opacity-50">
             <Check className="size-3.5" />
           </button>
-          <button onClick={cancelEdit} className="flex size-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100">
+          <button onClick={cancelEdit}
+            className="flex size-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100">
             <X className="size-3.5" />
           </button>
         </div>
@@ -595,130 +839,102 @@ function ServiceList({
     }
 
     return (
-      <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-100 bg-gray-50 hover:bg-gray-100/60 group transition-colors">
-        <GripVertical className="size-3.5 text-gray-300 shrink-0" />
-        <span className="flex-1 min-w-0 text-[13px] text-gray-800 truncate">{item.name}</span>
-        <span className="text-[13px] font-medium text-gray-600 tabular-nums shrink-0">
-          {item.price > 0 ? `$${item.price.toFixed(2)}` : <span className="text-gray-300">—</span>}
-        </span>
-        <span
-          title={item.visibleToCustomers ? "Visible to clients" : "Hidden from clients"}
-          className={cn("shrink-0", item.visibleToCustomers ? "text-blue-400" : "text-gray-200")}
-        >
-          {item.visibleToCustomers
-            ? <Eye className="size-3.5" />
-            : <EyeOff className="size-3.5" />}
-        </span>
-        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      <>
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-100 bg-gray-50 hover:bg-gray-100/60 group transition-colors">
+          {/* Expand toggle */}
           <button
-            onClick={() => moveItem(idx, -1)}
-            disabled={idx === 0}
-            className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed"
-            title="Move up"
+            type="button"
+            onClick={() => setExpandedId(isExpanded ? null : item.id)}
+            className="flex size-5 items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-white transition-colors shrink-0"
+            title={isExpanded ? "Collapse pricing rules" : "Expand pricing rules"}
           >
-            <ChevronUp className="size-3.5" />
+            <ChevronRight className={cn("size-3.5 transition-transform", isExpanded && "rotate-90")} />
           </button>
-          <button
-            onClick={() => moveItem(idx, 1)}
-            disabled={idx === items.length - 1}
-            className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed"
-            title="Move down"
+          <GripVertical className="size-3.5 text-gray-300 shrink-0" />
+          <span className="flex-1 min-w-0 text-[13px] text-gray-800 truncate">{item.name}</span>
+          {/* Pricing rules count badge */}
+          <span className={cn(
+            "text-[11px] px-1.5 py-0.5 rounded-full shrink-0 tabular-nums",
+            ruleCount > 0 ? "bg-blue-50 text-blue-600" : "bg-gray-100 text-gray-400"
+          )}>
+            {ruleCount > 0 ? `${ruleCount} rule${ruleCount > 1 ? "s" : ""}` : "no rules"}
+          </span>
+          <span
+            title={item.visibleToCustomers ? "Visible to clients" : "Hidden from clients"}
+            className={cn("shrink-0", item.visibleToCustomers ? "text-blue-400" : "text-gray-200")}
           >
-            <ChevronDown className="size-3.5" />
-          </button>
-          <button
-            onClick={() => startEdit(item)}
-            className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-blue-600 hover:bg-blue-50"
-            title="Edit"
-          >
-            <Pencil className="size-3.5" />
-          </button>
-          <button
-            onClick={() => handleDeleteClick(item)}
-            disabled={checkingId === item.id}
-            className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-50"
-            title="Delete permanently"
-          >
-            <Trash2 className="size-3.5" />
-          </button>
+            {item.visibleToCustomers ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+          </span>
+          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button onClick={() => moveItem(idx, -1)} disabled={idx === 0}
+              className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Move up"><ChevronUp className="size-3.5" /></button>
+            <button onClick={() => moveItem(idx, 1)} disabled={idx === items.length - 1}
+              className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-gray-700 hover:bg-white disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Move down"><ChevronDown className="size-3.5" /></button>
+            <button onClick={() => startEdit(item)}
+              className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-blue-600 hover:bg-blue-50"
+              title="Edit name / visibility"><Pencil className="size-3.5" /></button>
+            <button onClick={() => handleDeleteClick(item)} disabled={checkingId === item.id}
+              className="flex size-6 items-center justify-center rounded text-gray-400 hover:text-red-500 hover:bg-red-50 disabled:opacity-50"
+              title="Delete permanently"><Trash2 className="size-3.5" /></button>
+          </div>
         </div>
-      </div>
+
+        {/* Pricing rules panel */}
+        {isExpanded && (
+          <PricingRuleSubList
+            serviceTypeId={item.id}
+            initialRules={item.pricingRules}
+            isMockMode={isMockMode}
+          />
+        )}
+      </>
     )
   }
 
   return (
     <div className="space-y-1">
-      {/* Column header hints */}
-      <div className="flex items-center gap-2 px-3 pb-1">
-        <span className="w-3.5 shrink-0" />
-        <span className="flex-1 text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Name</span>
-        <span className="w-24 text-right text-[10px] font-semibold text-gray-400 uppercase tracking-wide">Price</span>
-        <span className="w-6 text-center text-[10px] font-semibold text-gray-400 uppercase tracking-wide" title="Visible to clients">
-          <Eye className="size-3 inline" />
-        </span>
-        <span className="w-[88px] shrink-0" />
-      </div>
-
       <InlineError msg={error} />
+
       {items.map((item, idx) => (
-        <ServiceRow key={item.id} item={item} idx={idx} />
+        <div key={item.id}>{renderServiceRow(item, idx)}</div>
       ))}
 
       {/* Add row */}
       {adding ? (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg border border-blue-200 bg-blue-50">
+          <span className="size-5 shrink-0" />
           <GripVertical className="size-3.5 text-blue-200 shrink-0" />
           <input
-            autoFocus
-            value={addState.name}
-            onChange={(e) => setAddState((s) => ({ ...s, name: e.target.value }))}
+            autoFocus value={addName}
+            onChange={(e) => setAddName(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Escape") { setAdding(false); setAddState({ name: "", price: "0", visibleToCustomers: true }) }
+              if (e.key === "Enter")  commitAdd()
+              if (e.key === "Escape") { setAdding(false); setAddName(""); setAddVisible(true) }
             }}
             placeholder="Service name…"
             className="flex-1 min-w-0 text-[13px] bg-white border border-blue-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400 placeholder:text-gray-400"
           />
-          <div className="flex items-center gap-1 shrink-0">
-            <span className="text-[13px] text-gray-500">$</span>
-            <input
-              type="number"
-              min={0}
-              step={0.01}
-              value={addState.price}
-              onChange={(e) => setAddState((s) => ({ ...s, price: e.target.value }))}
-              className="w-20 text-[13px] bg-white border border-blue-300 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
-            />
-          </div>
-          <button
-            type="button"
-            onClick={() => setAddState((s) => ({ ...s, visibleToCustomers: !s.visibleToCustomers }))}
-            title={addState.visibleToCustomers ? "Visible to clients" : "Hidden from clients"}
-            className={cn(
-              "flex size-6 items-center justify-center rounded transition-colors shrink-0",
-              addState.visibleToCustomers ? "text-blue-600 hover:bg-blue-100" : "text-gray-300 hover:bg-gray-100"
-            )}
-          >
-            {addState.visibleToCustomers ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
+          <button type="button" onClick={() => setAddVisible((v) => !v)}
+            title={addVisible ? "Visible to clients" : "Hidden from clients"}
+            className={cn("flex size-6 items-center justify-center rounded transition-colors shrink-0",
+              addVisible ? "text-blue-600 hover:bg-blue-100" : "text-gray-300 hover:bg-gray-100"
+            )}>
+            {addVisible ? <Eye className="size-3.5" /> : <EyeOff className="size-3.5" />}
           </button>
-          <button
-            onClick={commitAdd}
-            disabled={saving === "new"}
-            className="flex size-6 items-center justify-center rounded text-green-600 hover:bg-green-50 disabled:opacity-50"
-          >
+          <button onClick={commitAdd} disabled={saving === "new"}
+            className="flex size-6 items-center justify-center rounded text-green-600 hover:bg-green-50 disabled:opacity-50">
             <Check className="size-3.5" />
           </button>
-          <button
-            onClick={() => { setAdding(false); setAddState({ name: "", price: "0", visibleToCustomers: true }) }}
-            className="flex size-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100"
-          >
+          <button onClick={() => { setAdding(false); setAddName(""); setAddVisible(true) }}
+            className="flex size-6 items-center justify-center rounded text-gray-400 hover:bg-gray-100">
             <X className="size-3.5" />
           </button>
         </div>
       ) : (
-        <button
-          onClick={() => { setAdding(true); setError(null) }}
-          className="flex items-center gap-1.5 w-full px-3 py-2 rounded-lg border border-dashed border-gray-200 text-[13px] text-gray-400 hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50 transition-colors"
-        >
+        <button onClick={() => { setAdding(true); setError(null) }}
+          className="flex items-center gap-1.5 w-full px-3 py-2 rounded-lg border border-dashed border-gray-200 text-[13px] text-gray-400 hover:border-blue-300 hover:text-blue-600 hover:bg-blue-50 transition-colors">
           <Plus className="size-3.5" />
           Add service type
         </button>

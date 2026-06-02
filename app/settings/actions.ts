@@ -28,6 +28,16 @@ export type SettingsCarrier = {
   sortOrder: number
 }
 
+export type PricingRule = {
+  id: string
+  serviceTypeId: string
+  minQty: number
+  maxQty: number | null
+  pricePerUnit: number
+  label: string | null
+  sortOrder: number
+}
+
 export type SettingsServiceType = {
   id: string
   name: string
@@ -35,6 +45,7 @@ export type SettingsServiceType = {
   visibleToCustomers: boolean
   isActive: boolean
   sortOrder: number
+  pricingRules: PricingRule[]
 }
 
 export type SettingsCompany = {
@@ -73,11 +84,11 @@ export async function fetchSettings(): Promise<AllSettings> {
   if (!user || user.app_metadata?.role !== "admin") throw new Error("Admin access required.")
 
   console.log("[settings] loading company_settings…")
-  const [csRes, carRes, stRes] = await Promise.all([
-    // maybeSingle: returns null instead of throwing when 0 rows exist
+  const [csRes, carRes, stRes, prRes] = await Promise.all([
     supabase.from("company_settings").select("*").order("updated_at", { ascending: false }).limit(1).maybeSingle(),
     supabase.from("carriers").select("*").order("sort_order").order("name"),
     supabase.from("service_types").select("*").order("sort_order").order("name"),
+    supabase.from("service_pricing_rules").select("*").order("sort_order").order("min_qty"),
   ])
 
   if (csRes.error) {
@@ -87,8 +98,8 @@ export async function fetchSettings(): Promise<AllSettings> {
 
   console.log("[settings] loading carriers…", carRes.error?.message ?? "ok")
   console.log("[settings] loading service_types…", stRes.error?.message ?? "ok")
+  console.log("[settings] loading service_pricing_rules…", prRes.error?.message ?? "ok")
 
-  // If no row exists yet, seed one and use defaults
   let cs = csRes.data
   if (!cs) {
     console.log("[settings] no company_settings row — creating default row")
@@ -104,6 +115,16 @@ export async function fetchSettings(): Promise<AllSettings> {
       cs = inserted
     }
   }
+
+  const allRules: PricingRule[] = (prRes.data ?? []).map((r) => ({
+    id:             r.id,
+    serviceTypeId:  r.service_type_id,
+    minQty:         r.min_qty,
+    maxQty:         r.max_qty,
+    pricePerUnit:   r.price_per_unit,
+    label:          r.label,
+    sortOrder:      r.sort_order,
+  }))
 
   return {
     company: {
@@ -130,12 +151,13 @@ export async function fetchSettings(): Promise<AllSettings> {
       sortOrder: c.sort_order,
     })),
     serviceTypes: (stRes.data ?? []).map((s) => ({
-      id: s.id,
-      name: s.name,
-      price: s.price ?? 0,
+      id:                 s.id,
+      name:               s.name,
+      price:              s.price ?? 0,
       visibleToCustomers: s.visible_to_customers ?? true,
-      isActive: s.is_active,
-      sortOrder: s.sort_order,
+      isActive:           s.is_active,
+      sortOrder:          s.sort_order,
+      pricingRules:       allRules.filter((r) => r.serviceTypeId === s.id),
     })),
   }
 }
@@ -330,7 +352,7 @@ export async function upsertServiceType(data: {
 function mapServiceRow(row: {
   id: string; name: string; price: number; visible_to_customers: boolean
   is_active: boolean; sort_order: number
-}): SettingsServiceType {
+}, pricingRules: PricingRule[] = []): SettingsServiceType {
   return {
     id:                 row.id,
     name:               row.name,
@@ -338,6 +360,7 @@ function mapServiceRow(row: {
     visibleToCustomers: row.visible_to_customers ?? true,
     isActive:           row.is_active,
     sortOrder:          row.sort_order,
+    pricingRules,
   }
 }
 
@@ -426,4 +449,92 @@ export async function saveUserSettings(data: SettingsUsers): Promise<void> {
   }
 
   revalidatePath("/settings")
+}
+
+// ── Pricing rules ─────────────────────────────────────────────
+
+function mapRuleRow(r: {
+  id: string; service_type_id: string; min_qty: number; max_qty: number | null
+  price_per_unit: number; label: string | null; sort_order: number
+}): PricingRule {
+  return {
+    id:            r.id,
+    serviceTypeId: r.service_type_id,
+    minQty:        r.min_qty,
+    maxQty:        r.max_qty,
+    pricePerUnit:  r.price_per_unit,
+    label:         r.label,
+    sortOrder:     r.sort_order,
+  }
+}
+
+export async function upsertPricingRule(data: {
+  id?: string
+  serviceTypeId: string
+  minQty: number
+  maxQty: number | null
+  pricePerUnit: number
+  label: string | null
+  sortOrder: number
+}): Promise<PricingRule> {
+  await requireAdmin()
+  const admin = createServerAdminClient()
+  const payload = {
+    service_type_id: data.serviceTypeId,
+    min_qty:         data.minQty,
+    max_qty:         data.maxQty,
+    price_per_unit:  data.pricePerUnit,
+    label:           data.label || null,
+    sort_order:      data.sortOrder,
+  }
+  if (data.id) {
+    const { data: row, error } = await admin
+      .from("service_pricing_rules").update(payload).eq("id", data.id).select().single()
+    if (error) throw new Error(error.message)
+    return mapRuleRow(row)
+  }
+  const { data: row, error } = await admin
+    .from("service_pricing_rules").insert(payload).select().single()
+  if (error) throw new Error(error.message)
+  return mapRuleRow(row)
+}
+
+export async function deletePricingRule(id: string): Promise<void> {
+  await requireAdmin()
+  const admin = createServerAdminClient()
+  const { error } = await admin.from("service_pricing_rules").delete().eq("id", id)
+  if (error) throw new Error(error.message)
+}
+
+// ── lookupPricingRule ─────────────────────────────────────────
+// Any authenticated user can call this to calculate estimated price.
+
+export async function lookupPricingRule(
+  serviceTypeName: string,
+  quantity: number
+): Promise<{ pricePerUnit: number; label: string | null } | null> {
+  if (!serviceTypeName || quantity <= 0) return null
+  try {
+    const supabase = await createSupabaseServerClient()
+    const { data: { user } } = await supabase.auth.getUser()
+    if (!user) return null
+
+    const { data: st } = await supabase
+      .from("service_types").select("id").eq("name", serviceTypeName).maybeSingle()
+    if (!st) return null
+
+    const { data: rules } = await supabase
+      .from("service_pricing_rules")
+      .select("price_per_unit, label, min_qty, max_qty")
+      .eq("service_type_id", st.id)
+      .lte("min_qty", quantity)
+      .order("min_qty", { ascending: false })
+
+    if (!rules || rules.length === 0) return null
+    const match = rules.find((r) => r.max_qty === null || r.max_qty >= quantity)
+    if (!match) return null
+    return { pricePerUnit: match.price_per_unit, label: match.label }
+  } catch {
+    return null
+  }
 }

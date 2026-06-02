@@ -704,6 +704,42 @@ export type Database = {
         }
         Relationships: []
       }
+      service_pricing_rules: {
+        Row: {
+          id: string
+          service_type_id: string
+          min_qty: number
+          max_qty: number | null
+          price_per_unit: number
+          label: string | null
+          sort_order: number
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          service_type_id: string
+          min_qty: number
+          max_qty?: number | null
+          price_per_unit: number
+          label?: string | null
+          sort_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          service_type_id?: string
+          min_qty?: number
+          max_qty?: number | null
+          price_per_unit?: number
+          label?: string | null
+          sort_order?: number
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [{ foreignKeyName: "service_pricing_rules_service_type_id_fkey"; columns: ["service_type_id"]; referencedRelation: "service_types"; referencedColumns: ["id"] }]
+      }
       company_settings: {
         Row: {
           id: string
@@ -814,6 +850,7 @@ export type DbActivityLog        = Tables<"activity_log">
 export type DbCarrier            = Tables<"carriers">
 export type DbServiceType        = Tables<"service_types">
 export type DbCompanySettings    = Tables<"company_settings">
+export type DbServicePricingRule = Tables<"service_pricing_rules">
 
 // ── Enum value types ─────────────────────────────────────────
 export type DbClientStatus   = Enums<"client_status">
