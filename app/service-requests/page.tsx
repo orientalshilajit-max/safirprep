@@ -108,19 +108,25 @@ export default function ServiceRequestsPage() {
   function openCreate() { setEditing(null);  setModalOpen(true) }
   function openEdit(r: ServiceRequest) { setEditing(r); setModalOpen(true) }
 
+  type UploadError = { name: string; detail: string }
+  type UploadResult = { uploadedIds: string[]; errors: UploadError[]; bucketMissing: boolean }
+
   // Upload pending files to Supabase Storage and register them in the files context.
-  // Throws with a descriptive message if any upload fails (request is already saved by then).
+  // Returns a result object describing what succeeded and what failed.
+  // skipIds: file IDs already uploaded in a prior attempt (skipped on retry).
   async function uploadPendingFiles(
     requestId: string,
     clientId: string,
     clientName: string,
     category: FileCategory,
     form: RequestFormData,
-  ) {
-    const entries = Object.entries(form.pendingFiles)
-    if (!entries.length) return
+    skipIds: ReadonlySet<string> = new Set(),
+  ): Promise<UploadResult> {
+    const entries = Object.entries(form.pendingFiles).filter(([id]) => !skipIds.has(id))
+    if (!entries.length) return { uploadedIds: [], errors: [], bucketMissing: false }
 
-    const failed: string[] = []
+    const uploadedIds: string[] = []
+    const errors: UploadError[] = []
     let bucketMissing = false
 
     for (const [fileId, rawFile] of entries) {
@@ -134,26 +140,52 @@ export default function ServiceRequestsPage() {
       try {
         const doc = await uploadFile(fd)
         setFiles((prev) => [doc, ...prev])
+        uploadedIds.push(fileId)
       } catch (err) {
-        const msg = err instanceof Error ? err.message.toLowerCase() : ""
-        if (msg.includes("not found") || msg.includes("bucket") || msg.includes("does not exist")) {
+        const msg = err instanceof Error ? err.message : String(err)
+        if (msg.toLowerCase().includes("does not exist") || msg.toLowerCase().includes("bucket not found")) {
           bucketMissing = true
           break
         }
-        failed.push(sf?.name ?? rawFile.name)
+        errors.push({ name: sf?.name ?? rawFile.name, detail: msg })
       }
     }
 
-    if (bucketMissing) {
-      throw new Error(
-        "Request saved. Storage bucket 'files' does not exist — ask your admin to create it in Supabase."
-      )
+    return { uploadedIds, errors, bucketMissing }
+  }
+
+  // State for retrying after a partial upload failure.
+  // Set after request is saved but at least one file failed to upload.
+  const [retryUploadState, setRetryUploadState] = useState<{
+    requestId: string
+    clientId: string
+    clientName: string
+    category: FileCategory
+    alreadyUploadedIds: ReadonlySet<string>
+  } | null>(null)
+
+  // Called from modal "Retry Upload" button.
+  async function handleRetryUpload(form: RequestFormData) {
+    if (!retryUploadState) return
+    const result = await uploadPendingFiles(
+      retryUploadState.requestId,
+      retryUploadState.clientId,
+      retryUploadState.clientName,
+      retryUploadState.category,
+      form,
+      retryUploadState.alreadyUploadedIds,
+    )
+    if (result.bucketMissing) {
+      throw new Error("Storage bucket 'files' does not exist. Ask your admin to create it in Supabase.")
     }
-    if (failed.length) {
-      throw new Error(
-        `Request saved. Failed to upload: ${failed.join(", ")}.\nClick Cancel and re-attach them via Edit.`
-      )
+    if (result.errors.length) {
+      const combined = new Set([...retryUploadState.alreadyUploadedIds, ...result.uploadedIds])
+      setRetryUploadState({ ...retryUploadState, alreadyUploadedIds: combined })
+      const lines = result.errors.map((e) => `• ${e.name}: ${e.detail}`).join("\n")
+      throw new Error(`Upload failed:\n${lines}`)
     }
+    setRetryUploadState(null)
+    setModalOpen(false)
   }
 
   // Sync files to mock Files context (mock-only; not connected to Supabase yet)
@@ -385,10 +417,19 @@ export default function ServiceRequestsPage() {
       }
 
       // Upload any newly attached files
-      await uploadPendingFiles(
-        editing.id, editing.clientId, editing.clientName,
-        fileCategory(primaryServiceName), form,
+      const category = fileCategory(primaryServiceName)
+      const result = await uploadPendingFiles(
+        editing.id, editing.clientId, editing.clientName, category, form,
       )
+      if (result.bucketMissing) {
+        setRetryUploadState({ requestId: editing.id, clientId: editing.clientId, clientName: editing.clientName, category, alreadyUploadedIds: new Set(result.uploadedIds) })
+        throw new Error("Storage bucket 'files' does not exist. Ask your admin to create it in Supabase.")
+      }
+      if (result.errors.length) {
+        setRetryUploadState({ requestId: editing.id, clientId: editing.clientId, clientName: editing.clientName, category, alreadyUploadedIds: new Set(result.uploadedIds) })
+        const lines = result.errors.map((e) => `• ${e.name}: ${e.detail}`).join("\n")
+        throw new Error(`Request saved. Files failed to upload:\n${lines}`)
+      }
     } else {
       const created = await createRequest({
         clientId:  form.clientId || undefined,
@@ -404,10 +445,19 @@ export default function ServiceRequestsPage() {
         ? { ...p, available: Math.max(0, p.available - form.quantity) } : p))
 
       // Upload any attached files (request must exist first to get its ID)
-      await uploadPendingFiles(
-        created.id, created.clientId, created.clientName,
-        fileCategory(primaryServiceName), form,
+      const category = fileCategory(primaryServiceName)
+      const result = await uploadPendingFiles(
+        created.id, created.clientId, created.clientName, category, form,
       )
+      if (result.bucketMissing) {
+        setRetryUploadState({ requestId: created.id, clientId: created.clientId, clientName: created.clientName, category, alreadyUploadedIds: new Set(result.uploadedIds) })
+        throw new Error("Storage bucket 'files' does not exist. Ask your admin to create it in Supabase.")
+      }
+      if (result.errors.length) {
+        setRetryUploadState({ requestId: created.id, clientId: created.clientId, clientName: created.clientName, category, alreadyUploadedIds: new Set(result.uploadedIds) })
+        const lines = result.errors.map((e) => `• ${e.name}: ${e.detail}`).join("\n")
+        throw new Error(`Request saved. Files failed to upload:\n${lines}`)
+      }
     }
 
     setModalOpen(false)
@@ -705,8 +755,9 @@ export default function ServiceRequestsPage() {
       {/* Create / Edit modal */}
       <RequestModal
         isOpen={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={() => { setModalOpen(false); setRetryUploadState(null) }}
         onSave={handleSave}
+        onRetryUpload={retryUploadState ? handleRetryUpload : undefined}
         request={editing}
         clients={!isMockMode ? pageClients : undefined}
       />

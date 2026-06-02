@@ -178,15 +178,27 @@ export async function uploadFile(formData: FormData): Promise<FileDoc> {
   const requestId   = (formData.get("requestId")  as string | null) || null
   const uploadedBy  = (formData.get("uploadedBy") as string | null) ?? ""
 
-  // Build a unique storage path so filenames never collide
-  const safeFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_")
-  const storagePath  = `${clientId}/${crypto.randomUUID()}-${safeFileName}`
+  // Sanitize filename: lowercase, replace non-alphanumeric runs with hyphens
+  const rawExt  = file.name.includes(".") ? file.name.split(".").pop()!.toLowerCase() : ""
+  const rawBase = rawExt ? file.name.slice(0, -(rawExt.length + 1)) : file.name
+  const safeBase = rawBase.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "file"
+  const safeFileName = rawExt ? `${safeBase}.${rawExt}` : safeBase
+  const timestamp    = Date.now()
+
+  // Structured path within the bucket: {clientId}/requests/{requestId}/{ts}-{name}
+  const storagePath = requestId
+    ? `${clientId}/requests/${requestId}/${timestamp}-${safeFileName}`
+    : `${clientId}/${timestamp}-${safeFileName}`
 
   // Upload to Supabase Storage (service-role bypasses bucket RLS)
   const { error: storageErr } = await supabaseAdmin.storage
     .from(STORAGE_BUCKET)
     .upload(storagePath, file, { contentType: file.type, upsert: false })
-  if (storageErr) throw new Error(`Storage upload failed: ${storageErr.message}`)
+  if (storageErr) {
+    throw new Error(
+      `Storage upload failed (bucket: "${STORAGE_BUCKET}", path: "${storagePath}"): ${storageErr.message}`
+    )
+  }
 
   // Retrieve the public URL for the uploaded file
   const { data: { publicUrl } } = supabaseAdmin.storage
@@ -213,7 +225,7 @@ export async function uploadFile(formData: FormData): Promise<FileDoc> {
   if (dbErr) {
     // Best-effort cleanup of orphaned storage object
     await supabaseAdmin.storage.from(STORAGE_BUCKET).remove([storagePath])
-    throw new Error(dbErr.message)
+    throw new Error(`Database insert failed (files table): ${dbErr.message}`)
   }
 
   // Fetch the full row to return

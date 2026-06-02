@@ -221,11 +221,13 @@ type RequestModalProps = {
   isOpen: boolean
   onClose: () => void
   onSave: (form: FormState) => void | Promise<void>
+  /** Defined only after request was saved but file upload failed. Shows "Retry Upload" button. */
+  onRetryUpload?: (form: FormState) => Promise<void>
   request?: ServiceRequest | null
   clients?: { id: string; name: string }[]
 }
 
-export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }: RequestModalProps) {
+export function RequestModal({ isOpen, onClose, onSave, onRetryUpload, request, clients = [] }: RequestModalProps) {
   const { role }     = useRole()
   const { products } = useProducts()
   const isMockMode   = useIsMockMode()
@@ -385,6 +387,19 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
     }
   }
 
+  async function handleRetry() {
+    if (!onRetryUpload) return
+    setSaveError("")
+    setSaving(true)
+    try {
+      await onRetryUpload(form)
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Upload failed.")
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const canEdit         = isAdmin || !isEdit || request?.status === "New"
   const showClientField = isAdmin && !isEdit && clients.length > 0
 
@@ -428,14 +443,25 @@ export function RequestModal({ isOpen, onClose, onSave, request, clients = [] }:
               Cancel
             </button>
             {canEdit && (
-              <button
-                form="request-form"
-                type="submit"
-                disabled={saving}
-                className="px-4 py-2 text-[13px] font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-60"
-              >
-                {saving ? "Saving…" : isEdit ? "Save Changes" : "Submit Request"}
-              </button>
+              onRetryUpload ? (
+                <button
+                  type="button"
+                  onClick={handleRetry}
+                  disabled={saving}
+                  className="px-4 py-2 text-[13px] font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-60"
+                >
+                  {saving ? "Retrying…" : "Retry Upload"}
+                </button>
+              ) : (
+                <button
+                  form="request-form"
+                  type="submit"
+                  disabled={saving}
+                  className="px-4 py-2 text-[13px] font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-60"
+                >
+                  {saving ? "Saving…" : isEdit ? "Save Changes" : "Submit Request"}
+                </button>
+              )
             )}
           </div>
         </div>
