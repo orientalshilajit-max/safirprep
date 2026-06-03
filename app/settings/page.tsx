@@ -4,10 +4,11 @@ import { useState, useRef, useCallback, useEffect } from "react"
 import {
   Building2, Truck, Wrench, FileText, Users,
   ChevronUp, ChevronDown, ChevronRight, Pencil, Trash2, Plus, Check, X,
-  ImagePlus, GripVertical, Settings, ShieldCheck, Mail,
+  ImagePlus, GripVertical, Settings, Mail,
   KeyRound, Eye, EyeOff, AlertTriangle, AlertCircle, Tag,
 } from "lucide-react"
-import { useRole, useIsMockMode } from "@/components/layout/app-shell"
+import { useRole, useIsMockMode, useAuthUser } from "@/components/layout/app-shell"
+import { AdminUsersSection } from "./admin-users"
 import { ConfirmModal }           from "@/components/ui/confirm-modal"
 import { cn } from "@/lib/utils"
 import {
@@ -983,6 +984,7 @@ const DEFAULT_USERS: SettingsUsers = {
 export default function SettingsPage() {
   const { role }   = useRole()
   const isMockMode = useIsMockMode()
+  const authUser   = useAuthUser()
 
   // All hooks before any conditional return
   // loading starts false in mock mode (nothing to fetch), true otherwise
@@ -1364,34 +1366,10 @@ export default function SettingsPage() {
             {/* Admin users */}
             <div>
               <p className="text-[12px] font-semibold text-gray-700 mb-2">Admin Users</p>
-              <div className="rounded-lg border border-gray-100 overflow-hidden">
-                {[{ name: "Admin User", email: "admin@safirlogs.com", role: "Super Admin" }].map((u) => (
-                  <div key={u.email} className="flex items-center justify-between px-4 py-3 hover:bg-gray-50">
-                    <div className="flex items-center gap-3">
-                      <div className="flex size-8 items-center justify-center rounded-full bg-blue-600 text-white text-[11px] font-bold shrink-0 select-none">AU</div>
-                      <div>
-                        <p className="text-[13px] font-medium text-gray-900">{u.name}</p>
-                        <p className="text-[11px] text-gray-400">{u.email}</p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold bg-blue-50 text-blue-700 ring-1 ring-blue-200">
-                        {u.role}
-                      </span>
-                      <button className="flex size-7 items-center justify-center rounded-md text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-colors" title="Edit">
-                        <Pencil className="size-3.5" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="mt-2 flex items-center gap-2">
-                <button className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
-                  <Plus className="size-3.5" />
-                  Add Admin User
-                </button>
-                <p className="text-[11px] text-gray-400">Full user management available after Supabase Auth setup.</p>
-              </div>
+              <AdminUsersSection
+                isMockMode={isMockMode}
+                currentUserId={authUser?.id}
+              />
             </div>
 
             <div className="h-px bg-gray-100" />
@@ -1430,16 +1408,6 @@ export default function SettingsPage() {
                 <p className="text-[13px] font-semibold text-gray-700">Password Reset</p>
                 <p className="text-[12px] text-gray-500 mt-0.5 leading-relaxed">
                   Password resets are sent via email. Admin and client users can request a reset from the login page at any time. Admins can also trigger a reset from the Clients page using the key icon on any Active login account.
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-start gap-3 rounded-lg border border-blue-100 bg-blue-50 px-4 py-3.5">
-              <ShieldCheck className="size-4 text-blue-500 mt-0.5 shrink-0" />
-              <div>
-                <p className="text-[13px] font-semibold text-blue-800">Auth Backend</p>
-                <p className="text-[12px] text-blue-600 mt-0.5 leading-relaxed">
-                  Login, session management, and role-based access will be powered by Supabase Auth. Connect your Supabase project to enable live authentication.
                 </p>
               </div>
             </div>

@@ -504,6 +504,100 @@ export async function saveUserSettings(data: SettingsUsers): Promise<void> {
   revalidatePath("/settings")
 }
 
+// ── Admin user management ─────────────────────────────────────
+
+export type AdminUser = {
+  id: string
+  email: string
+  name: string
+  createdAt: string
+}
+
+export async function listAdminUsers(): Promise<AdminUser[]> {
+  await requireAdmin()
+  const admin = createServerAdminClient()
+
+  const { data, error } = await admin.auth.admin.listUsers({ perPage: 1000 })
+  if (error) throw new Error(error.message)
+
+  return (data.users ?? [])
+    .filter((u) => u.app_metadata?.role === "admin")
+    .map((u) => ({
+      id:        u.id,
+      email:     u.email ?? "",
+      name:      u.user_metadata?.full_name ?? u.user_metadata?.name ?? "",
+      createdAt: u.created_at ?? "",
+    }))
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+}
+
+export async function createAdminUser(data: {
+  email:       string
+  name:        string
+  password:    string
+  sendInvite:  boolean
+}): Promise<void> {
+  await requireAdmin()
+  const admin  = createServerAdminClient()
+  const email  = data.email.trim().toLowerCase()
+  const name   = data.name.trim()
+
+  if (!email)                                  throw new Error("Email is required.")
+  if (!data.sendInvite && !data.password)      throw new Error("Password is required.")
+  if (!data.sendInvite && data.password.length < 8)
+    throw new Error("Password must be at least 8 characters.")
+
+  if (data.sendInvite) {
+    const { data: invited, error } = await admin.auth.admin.inviteUserByEmail(email, {
+      data: { full_name: name },
+    })
+    if (error) throw new Error(error.message)
+    if (invited?.user?.id) {
+      await admin.auth.admin.updateUserById(invited.user.id, {
+        app_metadata:  { role: "admin" },
+        user_metadata: { full_name: name },
+      })
+    }
+  } else {
+    const { error } = await admin.auth.admin.createUser({
+      email,
+      password:      data.password,
+      user_metadata: { full_name: name },
+      app_metadata:  { role: "admin" },
+      email_confirm: true,
+    })
+    if (error) throw new Error(error.message)
+  }
+}
+
+export async function updateAdminDisplayName(userId: string, name: string): Promise<void> {
+  await requireAdmin()
+  const admin = createServerAdminClient()
+  const { error } = await admin.auth.admin.updateUserById(userId, {
+    user_metadata: { full_name: name.trim() },
+  })
+  if (error) throw new Error(error.message)
+}
+
+export async function removeAdminUser(userId: string): Promise<void> {
+  const me = await requireAdmin()
+  if (me.id === userId) throw new Error("You cannot remove yourself.")
+
+  const admin = createServerAdminClient()
+
+  // Guard: must leave at least one admin
+  const { data } = await admin.auth.admin.listUsers({ perPage: 1000 })
+  const remaining = (data?.users ?? []).filter(
+    (u) => u.app_metadata?.role === "admin" && u.id !== userId
+  )
+  if (remaining.length === 0) throw new Error("Cannot remove the last admin user.")
+
+  const { error } = await admin.auth.admin.updateUserById(userId, {
+    app_metadata: { role: null },
+  })
+  if (error) throw new Error(error.message)
+}
+
 // ── Pricing rules ─────────────────────────────────────────────
 
 function mapRuleRow(r: {
