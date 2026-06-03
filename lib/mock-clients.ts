@@ -32,7 +32,7 @@ export const mockClients: Client[] = [
     email: "finance@brightbox.io",
     phone: "(213) 555-0094",
     status: "Active",
-    loginStatus: "Invited",
+    loginStatus: "Invite Sent",
     lastActivity: "May 20, 2026",
     notes: "Pending portal onboarding. Follow up needed.",
     invitedAt: "May 15, 2026",

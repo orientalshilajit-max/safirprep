@@ -20,25 +20,28 @@ const STATUS_FROM_DB: Record<string, ClientStatus> = {
 
 const LOGIN_FROM_DB: Record<string, LoginStatus> = {
   no_login: "No Login",
-  invited:  "Invited",
+  invited:  "Invite Sent",
   active:   "Active",
+  disabled: "Disabled",
 }
 
 // ── Row mapper ────────────────────────────────────────────────
 
 type DbClientRow = {
-  id:           string
-  auth_user_id: string | null
-  company_name: string
-  contact_name: string
-  email:        string
-  phone:        string | null
-  status:       string
-  login_status: string
-  notes:        string | null
-  invited_at:   string | null
-  updated_at:   string
-  deleted_at:   string | null
+  id:                  string
+  auth_user_id:        string | null
+  company_name:        string
+  contact_name:        string
+  email:               string
+  phone:               string | null
+  status:              string
+  login_status:        string
+  notes:               string | null
+  invited_at:          string | null
+  last_invite_sent_at: string | null
+  invite_count:        number
+  updated_at:          string
+  deleted_at:          string | null
 }
 
 function fmtDate(iso: string) {
@@ -49,23 +52,26 @@ function fmtDate(iso: string) {
 
 function mapRow(row: DbClientRow): Client {
   return {
-    id:          row.id,
-    companyName: row.company_name,
-    contactName: row.contact_name,
-    email:       row.email,
-    phone:       row.phone ?? "",
-    status:      STATUS_FROM_DB[row.status]      ?? "Pending",
-    loginStatus: LOGIN_FROM_DB[row.login_status] ?? "No Login",
-    lastActivity: fmtDate(row.updated_at),
-    notes:       row.notes ?? "",
-    isArchived:  row.deleted_at != null,
-    invitedAt:   row.invited_at ? fmtDate(row.invited_at) : undefined,
+    id:               row.id,
+    companyName:      row.company_name,
+    contactName:      row.contact_name,
+    email:            row.email,
+    phone:            row.phone ?? "",
+    status:           STATUS_FROM_DB[row.status]      ?? "Pending",
+    loginStatus:      LOGIN_FROM_DB[row.login_status] ?? "No Login",
+    lastActivity:     fmtDate(row.updated_at),
+    notes:            row.notes ?? "",
+    isArchived:       row.deleted_at != null,
+    invitedAt:        row.invited_at          ? fmtDate(row.invited_at)          : undefined,
+    lastInviteSentAt: row.last_invite_sent_at ? fmtDate(row.last_invite_sent_at) : undefined,
+    inviteCount:      row.invite_count ?? 0,
   }
 }
 
 const CLIENT_SELECT = `
   id, auth_user_id, company_name, contact_name, email, phone,
-  status, login_status, notes, invited_at, updated_at, deleted_at
+  status, login_status, notes, invited_at, last_invite_sent_at, invite_count,
+  updated_at, deleted_at
 ` as const
 
 // ── Guard: require admin ──────────────────────────────────────
@@ -296,12 +302,18 @@ export async function sendInvite(clientId: string): Promise<Client> {
   if (metaErr) throw new Error(metaErr.message)
 
   // ── Update client record ──────────────────────────────────────
+  const clientRow = client as unknown as DbClientRow
+  const now       = new Date().toISOString()
+
   const { data: updated, error: uErr } = await supabase
     .from("clients")
     .update({
-      auth_user_id: authUserId,
-      login_status: "invited",
-      invited_at:   new Date().toISOString(),
+      auth_user_id:        authUserId,
+      login_status:        "invited",
+      // Only stamp invited_at on the first invite; preserve it on resends.
+      invited_at:          clientRow.invited_at ?? now,
+      last_invite_sent_at: now,
+      invite_count:        (clientRow.invite_count ?? 0) + 1,
     })
     .eq("id", clientId)
     .select(CLIENT_SELECT)
@@ -338,6 +350,81 @@ export async function resetPassword(clientId: string): Promise<void> {
     },
   })
   if (error) throw new Error(error.message)
+}
+
+// ── disableLogin ──────────────────────────────────────────────
+// Bans the Supabase Auth user (prevents sign-in) and marks the client row
+// as "disabled".  If the client has no linked auth user, only the DB field
+// is updated — they had no login access anyway.
+
+export async function disableLogin(clientId: string): Promise<Client> {
+  const { supabase } = await requireAdmin()
+  const adminClient  = createServerAdminClient()
+
+  const { data: client, error: gErr } = await supabase
+    .from("clients")
+    .select(CLIENT_SELECT)
+    .eq("id", clientId)
+    .single()
+  if (gErr) throw new Error(gErr.message)
+
+  const row = client as unknown as DbClientRow
+
+  // Ban the auth user so they can no longer sign in.
+  if (row.auth_user_id) {
+    const { error: banErr } = await adminClient.auth.admin.updateUserById(
+      row.auth_user_id,
+      { ban_duration: "87600h" } // 10 years — effectively permanent
+    )
+    if (banErr) throw new Error(banErr.message)
+  }
+
+  const { data: updated, error: uErr } = await supabase
+    .from("clients")
+    .update({ login_status: "disabled" })
+    .eq("id", clientId)
+    .select(CLIENT_SELECT)
+    .single()
+  if (uErr) throw new Error(uErr.message)
+  return mapRow(updated as unknown as DbClientRow)
+}
+
+// ── enableLogin ───────────────────────────────────────────────
+// Lifts the Supabase Auth ban and restores the client's login status.
+// If an auth user is linked, they become "active" again; otherwise "no_login".
+
+export async function enableLogin(clientId: string): Promise<Client> {
+  const { supabase } = await requireAdmin()
+  const adminClient  = createServerAdminClient()
+
+  const { data: client, error: gErr } = await supabase
+    .from("clients")
+    .select(CLIENT_SELECT)
+    .eq("id", clientId)
+    .single()
+  if (gErr) throw new Error(gErr.message)
+
+  const row = client as unknown as DbClientRow
+
+  let restoredStatus: "active" | "no_login" = "no_login"
+
+  if (row.auth_user_id) {
+    const { error: unbanErr } = await adminClient.auth.admin.updateUserById(
+      row.auth_user_id,
+      { ban_duration: "none" }
+    )
+    if (unbanErr) throw new Error(unbanErr.message)
+    restoredStatus = "active"
+  }
+
+  const { data: updated, error: uErr } = await supabase
+    .from("clients")
+    .update({ login_status: restoredStatus })
+    .eq("id", clientId)
+    .select(CLIENT_SELECT)
+    .single()
+  if (uErr) throw new Error(uErr.message)
+  return mapRow(updated as unknown as DbClientRow)
 }
 
 // ── activateClientLogin ───────────────────────────────────────

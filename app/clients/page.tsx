@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react"
 import {
   Search, Plus, Pencil, Trash2,
-  Mail, MailCheck, KeyRound,
+  Mail, MailCheck, KeyRound, UserMinus,
   Users, UserCheck, UserX, UserPlus,
   ChevronLeft, ChevronRight,
   AlertCircle, Archive, ArchiveRestore,
@@ -25,6 +25,8 @@ import {
   deleteClientPermanently,
   sendInvite,
   resetPassword,
+  disableLogin,
+  enableLogin,
   listClients,
 } from "@/app/clients/actions"
 import type { Client, ClientStatus, DataTableColumn } from "@/lib/types"
@@ -113,7 +115,7 @@ export default function ClientsPage() {
     active:   visible.filter((c) => c.status === "Active").length,
     pending:  visible.filter((c) => c.status === "Pending").length,
     inactive: visible.filter((c) => c.status === "Inactive").length,
-    invited:  visible.filter((c) => c.loginStatus === "Invited").length,
+    invited:  visible.filter((c) => c.loginStatus === "Invite Sent").length,
   }
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
@@ -127,6 +129,11 @@ export default function ClientsPage() {
   function flashError(msg: string) {
     setActionError(msg)
     setTimeout(() => setActionError(null), 4000)
+  }
+
+  function flashSuccess(clientId: string) {
+    setInviteSent(clientId)
+    setTimeout(() => setInviteSent(null), 2500)
   }
 
   /* ── Tab switch ───────────────────────────────────────────── */
@@ -231,28 +238,27 @@ export default function ClientsPage() {
   /* ── Send / resend invite ─────────────────────────────────── */
   async function handleSendInvite(c: Client) {
     if (isMockMode) {
+      const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
       setClients((prev) =>
         prev.map((x) =>
           x.id === c.id
             ? {
                 ...x,
-                loginStatus: "Invited",
-                invitedAt: new Date().toLocaleDateString("en-US", {
-                  month: "short", day: "numeric", year: "numeric",
-                }),
+                loginStatus:      "Invite Sent",
+                invitedAt:        x.invitedAt ?? now,
+                lastInviteSentAt: now,
+                inviteCount:      (x.inviteCount ?? 0) + 1,
               }
             : x
         )
       )
-      setInviteSent(c.id)
-      setTimeout(() => setInviteSent(null), 2500)
+      flashSuccess(c.id)
       return
     }
     try {
-      await sendInvite(c.id)
-      setClients(await listClients())
-      setInviteSent(c.id)
-      setTimeout(() => setInviteSent(null), 2500)
+      const updated = await sendInvite(c.id)
+      setClients((prev) => prev.map((x) => x.id === updated.id ? updated : x))
+      flashSuccess(c.id)
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to send invite.")
     }
@@ -260,13 +266,40 @@ export default function ClientsPage() {
 
   /* ── Reset password ───────────────────────────────────────── */
   async function handleResetPassword(c: Client) {
-    if (isMockMode) return
+    if (isMockMode) { flashSuccess(c.id); return }
     try {
       await resetPassword(c.id)
-      setInviteSent(c.id)
-      setTimeout(() => setInviteSent(null), 2500)
+      flashSuccess(c.id)
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to send password reset.")
+    }
+  }
+
+  /* ── Disable login ────────────────────────────────────────── */
+  async function handleDisableLogin(c: Client) {
+    if (isMockMode) {
+      setClients((prev) => prev.map((x) => x.id === c.id ? { ...x, loginStatus: "Disabled" } : x))
+      return
+    }
+    try {
+      const updated = await disableLogin(c.id)
+      setClients((prev) => prev.map((x) => x.id === updated.id ? updated : x))
+    } catch (err) {
+      flashError(err instanceof Error ? err.message : "Failed to disable login.")
+    }
+  }
+
+  /* ── Enable login ─────────────────────────────────────────── */
+  async function handleEnableLogin(c: Client) {
+    if (isMockMode) {
+      setClients((prev) => prev.map((x) => x.id === c.id ? { ...x, loginStatus: "Active" } : x))
+      return
+    }
+    try {
+      const updated = await enableLogin(c.id)
+      setClients((prev) => prev.map((x) => x.id === updated.id ? updated : x))
+    } catch (err) {
+      flashError(err instanceof Error ? err.message : "Failed to enable login.")
     }
   }
 
@@ -330,8 +363,18 @@ export default function ClientsPage() {
     },
     {
       id: "loginStatus",
-      header: "Login Status",
-      cell: (row) => <StatusBadge status={row.loginStatus} />,
+      header: "Login",
+      cell: (row) => (
+        <div>
+          <StatusBadge status={row.loginStatus} />
+          {(row.inviteCount ?? 0) > 0 && (
+            <p className="text-[10px] text-gray-400 mt-0.5 whitespace-nowrap">
+              {row.inviteCount} invite{row.inviteCount !== 1 ? "s" : ""}
+              {row.lastInviteSentAt && <> · {row.lastInviteSentAt}</>}
+            </p>
+          )}
+        </div>
+      ),
     },
     {
       id: "lastActivity",
@@ -350,54 +393,73 @@ export default function ClientsPage() {
     {
       id: "actions",
       header: "Actions",
-      headerClassName: "text-right w-32",
-      className: "text-right w-32",
+      headerClassName: "text-right w-36",
+      className: "text-right w-36",
       cell: (row) => {
         const justSent = inviteSent === row.id
+        const ls = row.loginStatus
         return (
           <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
             <IconButton variant="primary" title="Edit Client" onClick={() => openEdit(row)}>
               <Pencil className="size-3.5" />
             </IconButton>
 
-            {row.loginStatus === "No Login" && (
-              <IconButton
-                variant="primary"
-                title="Send Registration Invite"
+            {/* No Login → Send Invite */}
+            {ls === "No Login" && (
+              <IconButton variant="primary" title="Send Invite"
                 onClick={() => handleSendInvite(row)}
-                className={justSent ? "text-green-600 bg-green-50" : ""}
-              >
+                className={justSent ? "text-green-600 bg-green-50" : ""}>
                 <Mail className="size-3.5" />
               </IconButton>
             )}
 
-            {row.loginStatus === "Invited" && (
-              <IconButton
-                variant="primary"
-                title={`Resend Invite${row.invitedAt ? ` (sent ${row.invitedAt})` : ""}`}
+            {/* Invite Sent → Resend | Password Reset | Disable */}
+            {ls === "Invite Sent" && (<>
+              <IconButton variant="primary"
+                title={`Resend Invite${row.lastInviteSentAt ? ` (last: ${row.lastInviteSentAt})` : ""}`}
                 onClick={() => handleSendInvite(row)}
-                className={justSent ? "text-green-600 bg-green-50" : ""}
-              >
+                className={justSent ? "text-green-600 bg-green-50" : ""}>
                 <MailCheck className="size-3.5" />
               </IconButton>
-            )}
-
-            {row.loginStatus === "Active" && (
-              <IconButton
-                variant="default"
-                title="Send Password Reset"
+              <IconButton variant="default" title="Send Password Reset"
                 onClick={() => handleResetPassword(row)}
-                className={justSent ? "text-green-600 bg-green-50" : ""}
-              >
+                className={justSent ? "text-green-600 bg-green-50" : ""}>
                 <KeyRound className="size-3.5" />
               </IconButton>
-            )}
+              <IconButton variant="danger" title="Disable Login"
+                onClick={() => handleDisableLogin(row)}>
+                <UserMinus className="size-3.5" />
+              </IconButton>
+            </>)}
 
-            <IconButton
-              variant="danger"
-              title="Archive Client"
-              onClick={() => setArchiveTarget(row)}
-            >
+            {/* Active → Password Reset | Disable */}
+            {ls === "Active" && (<>
+              <IconButton variant="default" title="Send Password Reset"
+                onClick={() => handleResetPassword(row)}
+                className={justSent ? "text-green-600 bg-green-50" : ""}>
+                <KeyRound className="size-3.5" />
+              </IconButton>
+              <IconButton variant="danger" title="Disable Login"
+                onClick={() => handleDisableLogin(row)}>
+                <UserMinus className="size-3.5" />
+              </IconButton>
+            </>)}
+
+            {/* Disabled → Enable | Send Invite Again */}
+            {ls === "Disabled" && (<>
+              <IconButton variant="primary" title="Enable Login"
+                onClick={() => handleEnableLogin(row)}>
+                <UserCheck className="size-3.5" />
+              </IconButton>
+              <IconButton variant="primary" title="Send Invite Again"
+                onClick={() => handleSendInvite(row)}
+                className={justSent ? "text-green-600 bg-green-50" : ""}>
+                <Mail className="size-3.5" />
+              </IconButton>
+            </>)}
+
+            <IconButton variant="danger" title="Archive Client"
+              onClick={() => setArchiveTarget(row)}>
               <Archive className="size-3.5" />
             </IconButton>
           </div>
@@ -580,16 +642,26 @@ export default function ClientsPage() {
                         <Mail className="size-3.5" />
                       </IconButton>
                     )}
-                    {c.loginStatus === "Invited" && (
+                    {c.loginStatus === "Invite Sent" && (
                       <IconButton variant="primary" title="Resend Invite" onClick={() => handleSendInvite(c)}
                         className={inviteSent === c.id ? "text-green-600 bg-green-50" : ""}>
                         <MailCheck className="size-3.5" />
                       </IconButton>
                     )}
-                    {c.loginStatus === "Active" && (
+                    {(c.loginStatus === "Active" || c.loginStatus === "Invite Sent") && (
                       <IconButton variant="default" title="Reset Password" onClick={() => handleResetPassword(c)}
                         className={inviteSent === c.id ? "text-green-600 bg-green-50" : ""}>
                         <KeyRound className="size-3.5" />
+                      </IconButton>
+                    )}
+                    {(c.loginStatus === "Active" || c.loginStatus === "Invite Sent") && (
+                      <IconButton variant="danger" title="Disable Login" onClick={() => handleDisableLogin(c)}>
+                        <UserMinus className="size-3.5" />
+                      </IconButton>
+                    )}
+                    {c.loginStatus === "Disabled" && (
+                      <IconButton variant="primary" title="Enable Login" onClick={() => handleEnableLogin(c)}>
+                        <UserCheck className="size-3.5" />
                       </IconButton>
                     )}
                     <IconButton variant="danger" title="Archive" onClick={() => setArchiveTarget(c)}>

@@ -29,6 +29,8 @@ export type Database = {
           login_status: Database["public"]["Enums"]["login_status"]
           notes: string | null
           invited_at: string | null
+          last_invite_sent_at: string | null
+          invite_count: number
           created_at: string
           updated_at: string
           deleted_at: string | null
@@ -44,6 +46,8 @@ export type Database = {
           login_status?: Database["public"]["Enums"]["login_status"]
           notes?: string | null
           invited_at?: string | null
+          last_invite_sent_at?: string | null
+          invite_count?: number
           created_at?: string
           updated_at?: string
           deleted_at?: string | null
@@ -59,6 +63,8 @@ export type Database = {
           login_status?: Database["public"]["Enums"]["login_status"]
           notes?: string | null
           invited_at?: string | null
+          last_invite_sent_at?: string | null
+          invite_count?: number
           created_at?: string
           updated_at?: string
           deleted_at?: string | null
@@ -841,7 +847,7 @@ export type Database = {
     }
     Enums: {
       client_status:   "pending" | "active" | "inactive"
-      login_status:    "no_login" | "invited" | "active"
+      login_status:    "no_login" | "invited" | "active" | "disabled"
       product_status:  "active" | "archived"
       shipment_status: "in_transit" | "arrived" | "received" | "partially_received" | "need_attention"
       service_status:  "new" | "in_progress" | "completed" | "need_attention" | "invoiced" | "cancelled"

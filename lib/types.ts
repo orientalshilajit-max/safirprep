@@ -1,7 +1,7 @@
 export type UserRole = "admin" | "client"
 
 export type ClientStatus = "Active" | "Pending" | "Inactive"
-export type LoginStatus = "No Login" | "Invited" | "Active"
+export type LoginStatus = "No Login" | "Invite Sent" | "Active" | "Disabled"
 
 export type Client = {
   id: string
@@ -15,6 +15,8 @@ export type Client = {
   notes: string
   isArchived?: boolean
   invitedAt?: string
+  lastInviteSentAt?: string
+  inviteCount?: number
 }
 export type ProductStatus = "Active" | "Archived"
 export type ShipmentStatus =

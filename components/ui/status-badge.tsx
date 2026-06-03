@@ -28,7 +28,8 @@ const variants: Record<string, string> = {
   Inactive:             "text-slate-500 bg-slate-100 ring-slate-200",
   /* Login Status */
   "No Login":           "text-gray-400 bg-gray-100 ring-gray-200",
-  Invited:              "text-amber-700 bg-amber-50 ring-amber-200",
+  "Invite Sent":        "text-amber-700 bg-amber-50 ring-amber-200",
+  Disabled:             "text-red-600 bg-red-50 ring-red-200",
 }
 
 type StatusBadgeProps = {
