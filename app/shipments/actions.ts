@@ -181,31 +181,34 @@ export async function createShipment(input: CreateInput): Promise<Shipment> {
     )
   }
 
-  // Generate shipment number
-  const { data: recent } = await supabase
-    .from("incoming_shipments")
-    .select("shipment_number")
-    .order("created_at", { ascending: false })
-    .limit(20)
+  // Insert shipment using an atomic PostgreSQL sequence for the number.
+  // Retry up to 5 times in the rare event a sequence value collides with
+  // a manually-inserted row; each retry consumes the next sequence value.
+  const MAX_RETRIES = 5
+  let ship: { id: string } | null = null
 
-  let maxNum = 1008
-  for (const row of recent ?? []) {
-    const n = parseInt(row.shipment_number.replace("IN-", "")) || 0
-    if (n > maxNum) maxNum = n
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const { data: numData, error: numErr } = await supabase
+      .rpc("next_shipment_number")
+    if (numErr) throw new Error(numErr.message)
+
+    const { data, error: sErr } = await supabase
+      .from("incoming_shipments")
+      .insert({
+        client_id:       clientId,
+        shipment_number: numData as string,
+        status:          "in_transit",
+        notes:           input.notes.trim() || null,
+      })
+      .select("id")
+      .single()
+
+    if (!sErr) { ship = data; break }
+    // 23505 = unique_violation — sequence value already taken, try the next one
+    if (sErr.code !== "23505") throw new Error(sErr.message)
   }
 
-  // Insert shipment (user session — RLS enforces ownership)
-  const { data: ship, error: sErr } = await supabase
-    .from("incoming_shipments")
-    .insert({
-      client_id:       clientId,
-      shipment_number: `IN-${maxNum + 1}`,
-      status:          "in_transit",
-      notes:           input.notes.trim() || null,
-    })
-    .select("id")
-    .single()
-  if (sErr) throw new Error(sErr.message)
+  if (!ship) throw new Error("Failed to generate unique shipment number")
 
   const validProducts = input.products.filter((p) => p.productId && p.units > 0)
   const validTracking  = input.tracking.filter((t) => t.carrier)

@@ -109,6 +109,28 @@ begin
 end;
 $$;
 
+-- Atomic shipment-number counter.  Using a sequence avoids the
+-- racy max+1 pattern that caused duplicate-key errors under
+-- concurrent inserts.
+create sequence if not exists public.shipment_number_seq
+  start with 1009
+  increment by 1
+  no maxvalue
+  cache 1;
+
+create or replace function public.next_shipment_number()
+returns text
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  return 'IN-' || nextval('public.shipment_number_seq')::text;
+end;
+$$;
+
+grant execute on function public.next_shipment_number() to authenticated;
+
 
 -- ============================================================
 -- TABLES  (parent tables first)

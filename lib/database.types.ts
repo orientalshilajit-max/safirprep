@@ -844,6 +844,10 @@ export type Database = {
         Args: Record<string, never>
         Returns: string
       }
+      next_shipment_number: {
+        Args: Record<string, never>
+        Returns: string
+      }
     }
     Enums: {
       client_status:   "pending" | "active" | "inactive"
