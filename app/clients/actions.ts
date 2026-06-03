@@ -260,8 +260,11 @@ export async function sendInvite(clientId: string): Promise<Client> {
   }
 
   // ── Send the invite ───────────────────────────────────────────
+  // The link in the invite email goes through Supabase, which appends
+  // ?code=<PKCE_code> and redirects to this URL.  The callback route
+  // exchanges the code for a session and forwards the client to /set-password.
   const redirectTo = process.env.NEXT_PUBLIC_APP_URL
-    ? `${process.env.NEXT_PUBLIC_APP_URL}/dashboard`
+    ? `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback?next=/set-password`
     : undefined
 
   let authUserId: string
@@ -324,10 +327,15 @@ export async function resetPassword(clientId: string): Promise<void> {
   const email = (client as { email: string }).email
 
   // generateLink sends the recovery email via Supabase's configured SMTP.
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL
   const { error } = await adminClient.auth.admin.generateLink({
-    type:       "recovery",
+    type:    "recovery",
     email,
-    options:    { redirectTo: process.env.NEXT_PUBLIC_APP_URL ?? undefined },
+    options: {
+      redirectTo: appUrl
+        ? `${appUrl}/auth/callback?next=/set-password`
+        : undefined,
+    },
   })
   if (error) throw new Error(error.message)
 }

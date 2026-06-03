@@ -17,7 +17,7 @@ import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 
 // Routes that are always public (no session required)
-const PUBLIC_PATHS = ["/login"]
+const PUBLIC_PATHS = ["/login", "/set-password", "/auth/callback"]
 
 // Log env var presence once per process start (not per request).
 // Values are never logged — only whether they are set.
