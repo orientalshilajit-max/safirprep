@@ -320,6 +320,7 @@ export default function ClientsPage() {
     try {
       const updated = await disableLogin(c.id)
       setClients((prev) => prev.map((x) => x.id === updated.id ? updated : x))
+      flashSuccess("Login disabled.")
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to disable login.")
     } finally {
@@ -332,12 +333,14 @@ export default function ClientsPage() {
     const key = `${c.id}:enable`
     if (isMockMode) {
       setClients((prev) => prev.map((x) => x.id === c.id ? { ...x, loginStatus: "Active" } : x))
+      flashSuccess("Login enabled.")
       return
     }
     setLoadingKey(key)
     try {
       const updated = await enableLogin(c.id)
       setClients((prev) => prev.map((x) => x.id === updated.id ? updated : x))
+      flashSuccess("Login enabled.")
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to enable login.")
     } finally {

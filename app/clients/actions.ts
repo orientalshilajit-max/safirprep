@@ -369,6 +369,22 @@ export async function resendInvite(
 
     let authUserId: string
 
+    // ── Unban first if client is currently disabled ───────────
+    // A banned user gets error_code=user_banned when they click any invite
+    // or recovery link, so the ban must be lifted before the new link is sent.
+    const authIdToUnban = clientRow.auth_user_id || match?.id
+    if (clientRow.login_status === "disabled" && authIdToUnban) {
+      console.log("[resendInvite] client is disabled — unbanning before resend", { clientId })
+      const { error: unbanErr } = await adminClient.auth.admin.updateUserById(
+        authIdToUnban,
+        { ban_duration: "none" }
+      )
+      if (unbanErr) {
+        console.error("[resendInvite] unban failed", { clientId, error: unbanErr.message })
+        return { ok: false, error: `Could not unban user: ${unbanErr.message}` }
+      }
+    }
+
     if (!match) {
       // No auth user — create one via invite
       const { data: inv, error: invErr } = await adminClient.auth.admin.inviteUserByEmail(
@@ -485,9 +501,8 @@ export async function resetPassword(
 }
 
 // ── disableLogin ──────────────────────────────────────────────
-// Bans the Supabase Auth user (prevents sign-in) and marks the client row
-// as "disabled".  If the client has no linked auth user, only the DB field
-// is updated — they had no login access anyway.
+// Sets banned_until in Supabase Auth (blocks all sign-in attempts,
+// including invite/recovery links) and marks login_status = "disabled".
 
 export async function disableLogin(clientId: string): Promise<Client> {
   const { supabase } = await requireAdmin()
@@ -502,13 +517,17 @@ export async function disableLogin(clientId: string): Promise<Client> {
 
   const row = client as unknown as DbClientRow
 
-  // Ban the auth user so they can no longer sign in.
   if (row.auth_user_id) {
+    console.log("[disableLogin] banning auth user", { clientId, auth_user_id: row.auth_user_id })
     const { error: banErr } = await adminClient.auth.admin.updateUserById(
       row.auth_user_id,
-      { ban_duration: "87600h" } // 10 years — effectively permanent
+      { ban_duration: "87600h" } // ~10 years — effectively permanent
     )
-    if (banErr) throw new Error(banErr.message)
+    if (banErr) {
+      console.error("[disableLogin] ban failed", { clientId, error: banErr.message })
+      throw new Error(banErr.message)
+    }
+    console.log("[disableLogin] auth user banned successfully")
   }
 
   const { data: updated, error: uErr } = await supabase
@@ -522,8 +541,11 @@ export async function disableLogin(clientId: string): Promise<Client> {
 }
 
 // ── enableLogin ───────────────────────────────────────────────
-// Lifts the Supabase Auth ban and restores the client's login status.
-// If an auth user is linked, they become "active" again; otherwise "no_login".
+// Clears banned_until in Supabase Auth so the user can sign in again,
+// then restores login_status to the appropriate value:
+//   • email confirmed  → "active"   (they previously set a password)
+//   • email not confirmed → "invited" (they were invited but never finished setup)
+//   • no auth user     → "no_login"
 
 export async function enableLogin(clientId: string): Promise<Client> {
   const { supabase } = await requireAdmin()
@@ -537,16 +559,22 @@ export async function enableLogin(clientId: string): Promise<Client> {
   if (gErr) throw new Error(gErr.message)
 
   const row = client as unknown as DbClientRow
-
-  let restoredStatus: "active" | "no_login" = "no_login"
+  let restoredStatus: "active" | "invited" | "no_login" = "no_login"
 
   if (row.auth_user_id) {
-    const { error: unbanErr } = await adminClient.auth.admin.updateUserById(
+    console.log("[enableLogin] unbanning auth user", { clientId, auth_user_id: row.auth_user_id })
+    // ban_duration: "none" clears banned_until from the Supabase Auth record.
+    const { data: unbanData, error: unbanErr } = await adminClient.auth.admin.updateUserById(
       row.auth_user_id,
       { ban_duration: "none" }
     )
-    if (unbanErr) throw new Error(unbanErr.message)
-    restoredStatus = "active"
+    if (unbanErr) {
+      console.error("[enableLogin] unban failed", { clientId, error: unbanErr.message })
+      throw new Error(unbanErr.message)
+    }
+    // Restore the status that reflects the user's actual setup state.
+    restoredStatus = unbanData.user.email_confirmed_at ? "active" : "invited"
+    console.log("[enableLogin] auth user unbanned, restoredStatus:", restoredStatus)
   }
 
   const { data: updated, error: uErr } = await supabase

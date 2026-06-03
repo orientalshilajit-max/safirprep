@@ -14,10 +14,18 @@ function SetPasswordForm() {
   const searchParams = useSearchParams()
   const urlError     = searchParams.get("error")
 
-  // Derive initial state from URL params / config so useEffect never needs
-  // to call setState synchronously (avoids react-hooks/set-state-in-effect).
+  // This component is always client-rendered (useSearchParams inside Suspense),
+  // so window is defined here.  Parse hash params at render time so the
+  // useState initializer can use them without calling setState inside an effect.
+  const urlHashError = (
+    typeof window !== "undefined"
+      ? new URLSearchParams(window.location.hash.replace(/^#/, "")).get("error_description")
+      : null
+  ) ?? null
+
+  // Derive initial state — avoids synchronous setState in useEffect.
   const [state,           setState]           = useState<State>(() =>
-    urlError || !isSupabaseConfigured() ? "invalid" : "checking"
+    urlError || urlHashError || !isSupabaseConfigured() ? "invalid" : "checking"
   )
   const [password,        setPassword]        = useState("")
   const [confirmPassword, setConfirmPassword] = useState("")
@@ -30,44 +38,136 @@ function SetPasswordForm() {
   }>({ companyName: "Safir Logistics", logoUrl: null })
 
   useEffect(() => {
-    // Initial state already accounts for urlError / config via useState initializer.
-    // Skip async work if we're already in a terminal state.
-    if (urlError || !isSupabaseConfigured()) return
+    // ── Always log so failures are visible in the browser console ──
+    const sp = new URLSearchParams(window.location.search)
+    const hp = new URLSearchParams(window.location.hash.replace(/^#/, ""))
+    console.log("[set-password] full URL:", window.location.href)
+    console.log("[set-password] search params:", {
+      token_hash: sp.get("token_hash") ?? "—",
+      type:       sp.get("type")       ?? "—",
+      error:      sp.get("error")      ?? "—",
+    })
+    console.log("[set-password] hash params:", {
+      type:          hp.get("type")          ?? "—",
+      access_token:  hp.get("access_token")  ? "present" : "absent",
+      refresh_token: hp.get("refresh_token") ? "present" : "absent",
+      error:         urlHashError            ?? "none",
+    })
+    if (urlHashError) console.error("[set-password] auth error in URL:", urlHashError)
+
+    // Initial state already accounts for urlError / urlHashError / config.
+    if (urlError || urlHashError || !isSupabaseConfigured()) return
 
     fetchPublicCompanyBranding().then(setBranding).catch(() => {})
 
     const supabase = createBrowserClient()
-    let timer: ReturnType<typeof setTimeout>
 
-    // First check for an existing session (PKCE flow — code was already
-    // exchanged in /auth/callback and session cookies are set).
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session) {
-        setState("ready")
-        return
-      }
+    // ── Parse tokens (after logging, after guards) ────────────
+    const code         = sp.get("code")
+    const tokenHash    = sp.get("token_hash")
+    const urlType      = sp.get("type") || hp.get("type") || "invite"
+    const accessToken  = hp.get("access_token")
+    const refreshToken = hp.get("refresh_token")
 
-      // No session yet.  For implicit-flow invites, the tokens are in the
-      // URL hash and the browser Supabase client will detect them and fire
-      // an auth state change event.  Wait up to 4 s before giving up.
-      const { data: { subscription } } = supabase.auth.onAuthStateChange(
-        (event, newSession) => {
-          if (newSession || event === "SIGNED_IN" || event === "PASSWORD_RECOVERY") {
-            clearTimeout(timer)
-            subscription.unsubscribe()
+    console.log("[set-password] code:", code ?? "—")
+
+    // Shared cancellation flag — prevents stale setState after unmount.
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let pendingSubscription: { unsubscribe: () => void } | undefined
+
+    if (code) {
+      // ── PKCE: authorization code in search params ───────────
+      // Supabase invite / reset emails use this format when the project's
+      // Auth Flow Type is set to PKCE and redirectTo points here directly
+      // (bypassing /auth/callback).
+      supabase.auth
+        .exchangeCodeForSession(code)
+        .then(({ error }) => {
+          if (cancelled) return
+          if (error) {
+            console.error("[set-password] exchangeCodeForSession failed:", error.message)
+            setState("invalid")
+          } else {
+            console.log("[set-password] exchangeCodeForSession success")
             setState("ready")
           }
+        })
+    } else if (tokenHash) {
+      // ── PKCE: token_hash in search params ──────────────────
+      // Call verifyOtp to exchange the token for a session.
+      console.log("[set-password] verifyOtp → token_hash, type:", urlType)
+      supabase.auth
+        .verifyOtp({
+          token_hash: tokenHash,
+          type: urlType as "email" | "invite" | "magiclink" | "recovery" | "signup",
+        })
+        .then(({ error }) => {
+          if (cancelled) return
+          if (error) {
+            console.error("[set-password] verifyOtp failed:", error.message)
+            setState("invalid")
+          } else {
+            console.log("[set-password] verifyOtp succeeded")
+            setState("ready")
+          }
+        })
+    } else if (accessToken && refreshToken) {
+      // ── Implicit: tokens in URL hash ───────────────────────
+      console.log("[set-password] setSession from hash tokens, type:", urlType)
+      supabase.auth
+        .setSession({ access_token: accessToken, refresh_token: refreshToken })
+        .then(({ data, error }) => {
+          if (cancelled) return
+          if (error) {
+            console.error("[set-password] setSession failed:", error.message)
+            setState("invalid")
+          } else {
+            console.log("[set-password] setSession succeeded, user:", data.user?.email ?? "unknown")
+            setState("ready")
+          }
+        })
+    } else {
+      // ── No tokens in URL: check cookies or wait for browser client ─
+      // This covers PKCE where code was already exchanged in /auth/callback.
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        if (cancelled) return
+        console.log("[set-password] getSession:", session ? "found (" + session.user.email + ")" : "none")
+        if (session) {
+          setState("ready")
+          return
         }
-      )
 
-      timer = setTimeout(() => {
-        subscription.unsubscribe()
-        setState("invalid")
-      }, 4000)
-    })
+        // Last resort: let the browser Supabase client detect any remaining
+        // tokens (e.g. hash that wasn't parsed above) via onAuthStateChange.
+        console.log("[set-password] no tokens or session found — waiting for auth state change (4 s)…")
+        const { data: { subscription } } = supabase.auth.onAuthStateChange(
+          (event, newSession) => {
+            console.log("[set-password] onAuthStateChange:", event, newSession ? "has session" : "no session")
+            if (newSession || event === "SIGNED_IN" || event === "PASSWORD_RECOVERY") {
+              clearTimeout(timer)
+              pendingSubscription = undefined
+              subscription.unsubscribe()
+              if (!cancelled) setState("ready")
+            }
+          }
+        )
+        pendingSubscription = { unsubscribe: () => subscription.unsubscribe() }
 
-    return () => clearTimeout(timer)
-  }, [urlError])
+        timer = setTimeout(() => {
+          console.log("[set-password] timeout — no session found after 4 s")
+          pendingSubscription?.unsubscribe()
+          if (!cancelled) setState("invalid")
+        }, 4000)
+      })
+    }
+
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+      pendingSubscription?.unsubscribe()
+    }
+  }, [urlError, urlHashError])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
