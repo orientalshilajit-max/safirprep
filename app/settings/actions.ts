@@ -305,13 +305,14 @@ export async function saveInvoiceLogoUrl(url: string): Promise<void> {
 // ── Public company branding (no auth — for sidebar + login) ───
 
 export type CompanyBranding = {
-  companyName:    string
-  logoUrl:        string | null
-  invoiceLogoUrl: string | null
-  address:        string | null
-  email:          string | null
-  phone:          string | null
-  website:        string | null
+  companyName:         string
+  logoUrl:             string | null
+  invoiceLogoUrl:      string | null
+  address:             string | null
+  email:               string | null
+  phone:               string | null
+  website:             string | null
+  paymentInstructions: string | null
 }
 
 export async function fetchPublicCompanyBranding(): Promise<CompanyBranding> {
@@ -334,10 +335,11 @@ export async function fetchPublicCompanyBranding(): Promise<CompanyBranding> {
       address:        (data?.address           as string | null) ?? null,
       email:          (data?.email             as string | null) ?? null,
       phone:          (data?.phone             as string | null) ?? null,
-      website:        (data?.website           as string | null) ?? null,
+      website:             (data?.website              as string | null) ?? null,
+      paymentInstructions: (data?.invoice_payment_notes as string | null) ?? null,
     }
   } catch {
-    return { companyName: "Safir Logistics", logoUrl: null, invoiceLogoUrl: null, address: null, email: null, phone: null, website: null }
+    return { companyName: "Safir Logistics", logoUrl: null, invoiceLogoUrl: null, address: null, email: null, phone: null, website: null, paymentInstructions: null }
   }
 }
 

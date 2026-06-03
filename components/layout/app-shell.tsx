@@ -49,6 +49,7 @@ type AppContextType = {
   companyEmail: string | null
   companyPhone: string | null
   companyWebsite: string | null
+  companyPaymentInstructions: string | null
 }
 
 const AppContext = createContext<AppContextType>({
@@ -77,6 +78,7 @@ const AppContext = createContext<AppContextType>({
   companyEmail: null,
   companyPhone: null,
   companyWebsite: null,
+  companyPaymentInstructions: null,
 })
 
 // ── Hooks ─────────────────────────────────────────────────────
@@ -130,8 +132,8 @@ export function useRefreshAll() {
 }
 
 export function useCompanyBranding() {
-  const { companyName, companyLogoUrl, companyInvoiceLogoUrl, companyAddress, companyEmail, companyPhone, companyWebsite } = useContext(AppContext)
-  return { companyName, companyLogoUrl, companyInvoiceLogoUrl, companyAddress, companyEmail, companyPhone, companyWebsite }
+  const { companyName, companyLogoUrl, companyInvoiceLogoUrl, companyAddress, companyEmail, companyPhone, companyWebsite, companyPaymentInstructions } = useContext(AppContext)
+  return { companyName, companyLogoUrl, companyInvoiceLogoUrl, companyAddress, companyEmail, companyPhone, companyWebsite, companyPaymentInstructions }
 }
 
 // ── AppShell ──────────────────────────────────────────────────
@@ -159,10 +161,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [invoices,      setInvoices]      = useState<Invoice[]>(isMockMode ? mockInvoices : [])
   const [clients,       setClients]       = useState<Client[]>(isMockMode ? mockClients : [])
   const [isRefreshing,  setIsRefreshing]  = useState(false)
-  const [companyName,          setCompanyName]          = useState("Safir Logistics")
-  const [companyLogoUrl,       setCompanyLogoUrl]       = useState<string | null>(null)
-  const [companyInvoiceLogoUrl, setCompanyInvoiceLogoUrl] = useState<string | null>(null)
-  const [companyAddress,       setCompanyAddress]       = useState<string | null>(null)
+  const [companyName,               setCompanyName]               = useState("Safir Logistics")
+  const [companyLogoUrl,            setCompanyLogoUrl]            = useState<string | null>(null)
+  const [companyInvoiceLogoUrl,     setCompanyInvoiceLogoUrl]     = useState<string | null>(null)
+  const [companyAddress,            setCompanyAddress]            = useState<string | null>(null)
+  const [companyPaymentInstructions, setCompanyPaymentInstructions] = useState<string | null>(null)
   const [companyEmail,   setCompanyEmail]   = useState<string | null>(null)
   const [companyPhone,   setCompanyPhone]   = useState<string | null>(null)
   const [companyWebsite, setCompanyWebsite] = useState<string | null>(null)
@@ -203,6 +206,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setCompanyEmail(brandingData.email)
       setCompanyPhone(brandingData.phone)
       setCompanyWebsite(brandingData.website)
+      setCompanyPaymentInstructions(brandingData.paymentInstructions)
       console.log("[DataSource] Refresh complete. Source: Supabase")
     } catch (err) {
       console.error("[DataSource] Refresh failed:", err)
@@ -268,6 +272,12 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           setClients(clientsData)
           setCompanyName(brandingData.companyName)
           setCompanyLogoUrl(brandingData.logoUrl)
+          setCompanyInvoiceLogoUrl(brandingData.invoiceLogoUrl)
+          setCompanyAddress(brandingData.address)
+          setCompanyEmail(brandingData.email)
+          setCompanyPhone(brandingData.phone)
+          setCompanyWebsite(brandingData.website)
+          setCompanyPaymentInstructions(brandingData.paymentInstructions)
           authedRef.current = true
           console.log("[DataSource] Initial load complete. Source: Supabase")
         } catch {
@@ -341,6 +351,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         companyEmail,
         companyPhone,
         companyWebsite,
+        companyPaymentInstructions,
       }}
     >
       <div className="flex h-screen bg-slate-50 overflow-hidden">

@@ -170,13 +170,14 @@ export default function InvoicesPage() {
   }
 
   const companyInfo = {
-    name:           branding.companyName,
-    logoUrl:        branding.companyLogoUrl,
-    invoiceLogoUrl: branding.companyInvoiceLogoUrl,
-    address:        branding.companyAddress,
-    email:          branding.companyEmail,
-    phone:          branding.companyPhone,
-    website:        branding.companyWebsite,
+    name:                branding.companyName,
+    logoUrl:             branding.companyLogoUrl,
+    invoiceLogoUrl:      branding.companyInvoiceLogoUrl,
+    address:             branding.companyAddress,
+    email:               branding.companyEmail,
+    phone:               branding.companyPhone,
+    website:             branding.companyWebsite,
+    paymentInstructions: branding.companyPaymentInstructions,
   }
 
   /* ── Columns ── */

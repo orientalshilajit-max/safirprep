@@ -1,7 +1,7 @@
 "use client"
 
 import Image from "next/image"
-import { useRef, useState } from "react"
+import { useState } from "react"
 import { Pencil, Download, Plus, Trash2, Box, CheckCircle, AlertCircle } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -40,18 +40,19 @@ function escHtml(str: string) {
 }
 
 export type InvoiceCompanyInfo = {
-  name:           string
-  logoUrl:        string | null
-  invoiceLogoUrl: string | null
-  address:        string | null
-  email:          string | null
-  phone:          string | null
-  website:        string | null
+  name:                string
+  logoUrl:             string | null
+  invoiceLogoUrl:      string | null
+  address:             string | null
+  email:               string | null
+  phone:               string | null
+  website:             string | null
+  paymentInstructions: string | null
 }
 
-// ── PDF generation (browser print-to-PDF) ────────────────────
+// ── PDF generation ────────────────────────────────────────────
 
-function buildInvoiceHtml(inv: Invoice, co: InvoiceCompanyInfo): string {
+function buildInvoiceHtml(inv: Invoice, co: InvoiceCompanyInfo, mode: "print" | "pdf" = "print"): string {
   const logoSrc = co.invoiceLogoUrl || co.logoUrl
   const total   = invoiceTotal(inv.lineItems)
 
@@ -68,9 +69,7 @@ function buildInvoiceHtml(inv: Invoice, co: InvoiceCompanyInfo): string {
 
   const companyInfoHtml = [
     co.address ? `<p style="margin:2px 0;font-size:11px;color:#6b7280;white-space:pre-line">${escHtml(co.address)}</p>` : "",
-    (co.email || co.phone)
-      ? `<p style="margin:2px 0;font-size:11px;color:#6b7280">${[co.email, co.phone].filter((s): s is string => !!s).map(escHtml).join(" · ")}</p>`
-      : "",
+    co.email   ? `<p style="margin:2px 0;font-size:11px;color:#6b7280">${escHtml(co.email)}</p>` : "",
     co.website ? `<p style="margin:2px 0;font-size:11px;color:#3b82f6">${escHtml(co.website)}</p>` : "",
   ].filter(Boolean).join("")
 
@@ -144,8 +143,11 @@ function buildInvoiceHtml(inv: Invoice, co: InvoiceCompanyInfo): string {
   </div>
 
   ${inv.notes ? `<div style="margin-top:24px;background:#f9fafb;border:1px solid #f3f4f6;border-radius:8px;padding:14px"><p style="font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Notes</p><p style="font-size:13px;color:#374151;white-space:pre-line">${escHtml(inv.notes)}</p></div>` : ""}
+  ${co.paymentInstructions && inv.status !== "Paid" && inv.status !== "Void" && inv.status !== "Combined"
+    ? `<div style="margin-top:20px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px"><p style="font-size:10px;font-weight:700;color:#3b82f6;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">Payment Instructions</p><p style="font-size:12px;color:#1d4ed8;white-space:pre-line">${escHtml(co.paymentInstructions)}</p></div>`
+    : ""}
 
-<script>window.onload=function(){setTimeout(function(){window.print();},200);}</script>
+${mode === "print" ? `<script>window.onload=function(){setTimeout(function(){window.print();},200);}</script>` : ""}
 </body>
 </html>`
 }
@@ -160,15 +162,15 @@ type InvoiceModalProps = {
 }
 
 export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: InvoiceModalProps) {
-  const [editing,     setEditing]     = useState(false)
-  const [saving,      setSaving]      = useState(false)
-  const [saveError,   setSaveError]   = useState("")
-  const [pdfError,    setPdfError]    = useState("")
+  const [editing,    setEditing]    = useState(false)
+  const [saving,     setSaving]     = useState(false)
+  const [saveError,  setSaveError]  = useState("")
+  const [pdfError,   setPdfError]   = useState("")
+  const [pdfLoading, setPdfLoading] = useState(false)
   const [draft, setDraft] = useState<Invoice | null>(
     () => invoice ? structuredClone(invoice) : null
   )
   const [prevInvoice, setPrevInvoice] = useState(invoice)
-  const printWinRef = useRef<Window | null>(null)
 
   if (prevInvoice !== invoice) {
     setPrevInvoice(invoice)
@@ -176,6 +178,7 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
     setEditing(false)
     setSaveError("")
     setPdfError("")
+    setPdfLoading(false)
   }
 
   if (!invoice || !draft) return null
@@ -186,7 +189,7 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
 
   const co: InvoiceCompanyInfo = companyInfo ?? {
     name: "Safir Logistics", logoUrl: null, invoiceLogoUrl: null,
-    address: null, email: null, phone: null, website: null,
+    address: null, email: null, phone: null, website: null, paymentInstructions: null,
   }
 
   // Use invoice-specific logo first, then sidebar logo, then text fallback
@@ -220,23 +223,43 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
     setDraft(structuredClone(invoice)); setEditing(false); setSaveError("")
   }
 
-  /* ── PDF download (browser print-to-PDF) ── */
-  function handleDownloadPdf() {
+  /* ── PDF download — html2pdf.js generates a real PDF file ── */
+  async function handleDownloadPdf() {
     if (!draft) return
     setPdfError("")
+    setPdfLoading(true)
+    let container: HTMLDivElement | null = null
     try {
-      const html = buildInvoiceHtml(draft, co)
-      const win = window.open("", `invoice-${draft.invoiceNumber}`, "width=900,height=700,menubar=yes,toolbar=yes")
-      if (!win) {
-        setPdfError("PDF blocked: please allow pop-ups for this site, then try again.")
-        return
-      }
-      printWinRef.current = win
-      win.document.open()
-      win.document.write(html)
-      win.document.close()
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const html2pdf = ((await import("html2pdf.js")) as any).default
+      const fullHtml = buildInvoiceHtml(draft, co, "pdf")
+      // Extract body content from the full HTML document
+      const bodyMatch = fullHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i)
+      const bodyHtml  = bodyMatch?.[1] ?? fullHtml
+
+      // Mount off-screen so html2canvas can measure/render it
+      container = document.createElement("div")
+      container.style.cssText =
+        "position:absolute;left:-9999px;top:0;width:800px;background:#fff;" +
+        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111827"
+      container.innerHTML = bodyHtml
+      document.body.appendChild(container)
+
+      await html2pdf()
+        .set({
+          margin:      [10, 10, 10, 10],
+          filename:    `invoice-${draft.invoiceNumber}.pdf`,
+          image:       { type: "jpeg", quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true, logging: false },
+          jsPDF:       { unit: "mm", format: "a4", orientation: "portrait" },
+        })
+        .from(container)
+        .save()
     } catch (err) {
       setPdfError(err instanceof Error ? err.message : "Failed to generate PDF.")
+    } finally {
+      if (container && document.body.contains(container)) document.body.removeChild(container)
+      setPdfLoading(false)
     }
   }
 
@@ -284,9 +307,9 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
                 </>
               )}
             </div>
-            <button onClick={handleDownloadPdf}
-              className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 text-white text-[13px] font-semibold rounded-lg hover:bg-blue-700 transition-colors">
-              <Download className="size-3.5" /> Download PDF
+            <button onClick={handleDownloadPdf} disabled={pdfLoading}
+              className="flex items-center gap-1.5 px-4 py-1.5 bg-blue-600 text-white text-[13px] font-semibold rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-60">
+              <Download className="size-3.5" /> {pdfLoading ? "Generating…" : "Download PDF"}
             </button>
           </div>
         </div>
@@ -309,11 +332,7 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
                 <p className="text-[15px] font-bold text-gray-900 leading-tight">{co.name}</p>
               )}
               {co.address && <p className="text-[11px] text-gray-400 mt-0.5 whitespace-pre-line leading-snug">{co.address}</p>}
-              {(co.email || co.phone) && (
-                <p className="text-[11px] text-gray-400 mt-0.5">
-                  {[co.email, co.phone].filter(Boolean).join(" · ")}
-                </p>
-              )}
+              {co.email   && <p className="text-[11px] text-gray-400 mt-0.5">{co.email}</p>}
               {co.website && <p className="text-[11px] text-blue-500">{co.website}</p>}
             </div>
           </div>
@@ -491,15 +510,10 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
         )}
 
         {/* ── Payment instructions ── */}
-        {!isPaid && draft.status !== "Void" && draft.status !== "Combined" && (
+        {!isPaid && draft.status !== "Void" && draft.status !== "Combined" && co.paymentInstructions && (
           <div className="rounded-lg border border-blue-100 bg-blue-50 p-3.5">
             <p className="text-[10px] font-bold text-blue-500 uppercase tracking-wider mb-1.5">Payment Instructions</p>
-            <p className="text-[12px] text-blue-700 leading-relaxed">
-              Please remit payment via ACH, wire transfer, or check made payable to{" "}
-              <strong>{co.name}</strong>.{" "}
-              Reference invoice number <strong>{draft.invoiceNumber}</strong> in your payment details.
-              {co.email && <> Questions? Contact <strong>{co.email}</strong>.</>}
-            </p>
+            <p className="text-[12px] text-blue-700 leading-relaxed whitespace-pre-line">{co.paymentInstructions}</p>
           </div>
         )}
       </div>
