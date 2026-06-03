@@ -4,51 +4,105 @@ import Image from "next/image"
 import { useState, useRef } from "react"
 import { Upload, AlertCircle, X } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
-import { uploadProductImage } from "@/app/products/actions"
+import { isSupabaseConfigured, createBrowserClient } from "@/lib/supabase"
 import type { Product, ProductStatus, UserRole } from "@/lib/types"
 
+// ── Constants ─────────────────────────────────────────────────
+
+const PRODUCT_IMAGE_BUCKET = "product-images"
+const ALLOWED_TYPES        = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
+const MAX_INPUT_BYTES      = 20 * 1024 * 1024  // reject files >20 MB before even compressing
+const MAX_COMPRESSED_BYTES =  2 * 1024 * 1024  // warn if still >2 MB after compression
+const COMPRESS_QUALITY     = 0.82
+const MAX_DIMENSION        = 1200               // px
+
+// ── Helpers ───────────────────────────────────────────────────
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** Resize + convert to WebP in the browser using Canvas. */
+async function compressToWebp(
+  file: File
+): Promise<{ blob: Blob; previewUrl: string }> {
+  return new Promise((resolve, reject) => {
+    const img = document.createElement("img")
+    const objectUrl = URL.createObjectURL(file)
+
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl)
+
+      let w = img.naturalWidth
+      let h = img.naturalHeight
+
+      // Proportionally scale down if either dimension exceeds MAX_DIMENSION
+      if (w > MAX_DIMENSION || h > MAX_DIMENSION) {
+        if (w >= h) { h = Math.round(h * MAX_DIMENSION / w); w = MAX_DIMENSION }
+        else        { w = Math.round(w * MAX_DIMENSION / h); h = MAX_DIMENSION }
+      }
+
+      const canvas = document.createElement("canvas")
+      canvas.width  = w
+      canvas.height = h
+      const ctx = canvas.getContext("2d")
+      if (!ctx) { reject(new Error("Canvas not supported in this browser.")); return }
+      ctx.drawImage(img, 0, 0, w, h)
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { reject(new Error("Image compression failed.")); return }
+          resolve({ blob, previewUrl: URL.createObjectURL(blob) })
+        },
+        "image/webp",
+        COMPRESS_QUALITY
+      )
+    }
+
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      reject(new Error("Failed to load image for compression."))
+    }
+    img.src = objectUrl
+  })
+}
+
+// ── Types ─────────────────────────────────────────────────────
+
 export type ProductFormData = {
-  name: string
-  sku: string
-  asin: string
-  fnsku: string
-  notes: string
-  status: ProductStatus
-  image: string | null
+  name:      string
+  sku:       string
+  asin:      string
+  fnsku:     string
+  notes:     string
+  status:    ProductStatus
+  image:     string | null
   available: number
-  incoming: number
-  damaged: number
+  incoming:  number
+  damaged:   number
   /** Populated only for admin creating a new product (Supabase mode). */
   clientId?: string
 }
 
 const empty: ProductFormData = {
-  name: "",
-  sku: "",
-  asin: "",
-  fnsku: "",
-  notes: "",
-  status: "Active",
-  image: null,
-  available: 0,
-  incoming: 0,
-  damaged: 0,
+  name: "", sku: "", asin: "", fnsku: "", notes: "",
+  status: "Active", image: null,
+  available: 0, incoming: 0, damaged: 0,
 }
-
-const ALLOWED_TYPES = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
-const MAX_BYTES     = 5 * 1024 * 1024 // 5 MB
 
 type ProductModalProps = {
-  isOpen: boolean
-  onClose: () => void
-  /** May return a Promise — modal shows a loading state while it resolves. */
-  onSave: (data: ProductFormData) => void | Promise<void>
+  isOpen:   boolean
+  onClose:  () => void
+  onSave:   (data: ProductFormData) => void | Promise<void>
   product?: Product | null
-  role: UserRole
-  zIndex?: number
-  /** Admin-only: list of clients for the "assign to client" selector. */
+  role:     UserRole
+  zIndex?:  number
   clients?: { id: string; name: string }[]
 }
+
+// ── Component ─────────────────────────────────────────────────
 
 export function ProductModal({
   isOpen,
@@ -63,22 +117,33 @@ export function ProductModal({
   const [saving,    setSaving]    = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
 
-  // Image upload state
-  const [imageFile,    setImageFile]    = useState<File | null>(null)
+  // ── Image state ──────────────────────────────────────────────
+  // imageBlob: the compressed blob held in memory until save.
+  // imagePreview: an object URL for <Image> display (must be revoked on cleanup).
+  // imageSize: compressed size in bytes, shown to the user.
+  // compressing: true while the Canvas compression is running.
+  const [imageBlob,    setImageBlob]    = useState<Blob | null>(null)
   const [imagePreview, setImagePreview] = useState<string | null>(null)
+  const [imageSize,    setImageSize]    = useState<number | null>(null)
   const [imageError,   setImageError]   = useState<string | null>(null)
+  const [compressing,  setCompressing]  = useState(false)
+
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Track the (isOpen, product) pair we last initialised the form for.
+  // ── Derived-state reset on modal open/product change ─────────
   const [prevKey, setPrevKey] = useState<string>("")
   const currentKey = `${isOpen}|${product?.id ?? "__new__"}`
 
   if (prevKey !== currentKey) {
     setPrevKey(currentKey)
     setSaveError(null)
-    setImageFile(null)
+    // Revoke any previous preview blob URL to avoid memory leaks
+    if (imagePreview && imageBlob) URL.revokeObjectURL(imagePreview)
+    setImageBlob(null)
     setImagePreview(null)
+    setImageSize(null)
     setImageError(null)
+    setCompressing(false)
     if (product) {
       setForm({
         name:      product.name,
@@ -104,53 +169,110 @@ export function ProductModal({
     setForm((f) => ({ ...f, [key]: value }))
   }
 
-  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  // ── File select: validate + compress immediately ──────────────
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
-    // Reset so re-selecting the same file fires onChange
-    e.target.value = ""
+    e.target.value = "" // allow re-selecting the same file
     if (!file) return
 
     if (!ALLOWED_TYPES.includes(file.type)) {
       setImageError("Only JPG, PNG, and WebP images are allowed.")
       return
     }
-    if (file.size > MAX_BYTES) {
-      setImageError("Image must be under 5 MB.")
+    if (file.size > MAX_INPUT_BYTES) {
+      setImageError("File is too large to upload. Please choose an image under 20 MB.")
       return
     }
 
+    // Revoke previous blob preview before overwriting
+    if (imagePreview && imageBlob) URL.revokeObjectURL(imagePreview)
+    setImageBlob(null)
+    setImagePreview(null)
+    setImageSize(null)
     setImageError(null)
-    setImageFile(file)
-    setImagePreview(URL.createObjectURL(file))
+    setCompressing(true)
+
+    try {
+      const { blob, previewUrl } = await compressToWebp(file)
+
+      if (blob.size > MAX_COMPRESSED_BYTES) {
+        URL.revokeObjectURL(previewUrl)
+        setImageError("Image is too large. Please upload a smaller image.")
+        return
+      }
+
+      setImageBlob(blob)
+      setImagePreview(previewUrl)
+      setImageSize(blob.size)
+    } catch (err) {
+      setImageError(err instanceof Error ? err.message : "Failed to process image.")
+    } finally {
+      setCompressing(false)
+    }
   }
 
   function handleRemoveImage() {
-    if (imageFile) {
-      // Cancel the pending selection; restore whatever was previously saved
-      setImageFile(null)
+    if (imageBlob) {
+      if (imagePreview) URL.revokeObjectURL(imagePreview)
+      setImageBlob(null)
       setImagePreview(null)
+      setImageSize(null)
     } else {
-      // Remove the existing saved image
       set("image", null)
     }
   }
 
+  // ── Submit: upload compressed blob directly, then save ────────
   async function handleSubmit(e: { preventDefault(): void }) {
     e.preventDefault()
     if (!form.name.trim()) return
     setSaving(true)
     setSaveError(null)
+
     try {
       let imageUrl = form.image
 
-      if (imageFile) {
-        const fd = new FormData()
-        fd.set("file", imageFile)
-        // Pass clientId so the server can build the right storage path
-        const clientId = form.clientId ?? product?.clientId
-        if (clientId) fd.set("clientId", clientId)
-        if (product?.id) fd.set("productId", product.id)
-        imageUrl = await uploadProductImage(fd)
+      if (imageBlob) {
+        if (!isSupabaseConfigured()) {
+          // Mock / dev mode — use the local blob URL as a placeholder.
+          imageUrl = imagePreview
+        } else {
+          // Real mode: upload compressed WebP directly from the browser.
+          // Using the browser Supabase client means the user's JWT is sent,
+          // so storage policies (admin = any path; client = own folder) are enforced.
+          const supabase = createBrowserClient()
+          const { data: { user } } = await supabase.auth.getUser()
+          if (!user) throw new Error("Not authenticated. Please refresh and try again.")
+
+          const isAdminUser = user.app_metadata?.role === "admin"
+          const clientId    = isAdminUser
+            ? (form.clientId ?? product?.clientId ?? null)
+            : ((user.app_metadata?.client_id as string | undefined) ?? null)
+
+          if (!clientId) {
+            throw new Error(
+              isAdminUser
+                ? "Please select a client before uploading an image."
+                : "Client ID not found in your session. Please log out and log in again."
+            )
+          }
+
+          // Use existing product ID, or a random UUID for new products.
+          const productId = product?.id ?? crypto.randomUUID()
+          const path      = `${clientId}/${productId}/${crypto.randomUUID()}.webp`
+
+          const { error: upErr } = await supabase.storage
+            .from(PRODUCT_IMAGE_BUCKET)
+            .upload(path, imageBlob, { contentType: "image/webp", upsert: true })
+
+          if (upErr) throw new Error(upErr.message)
+
+          const { data: { publicUrl } } = supabase.storage
+            .from(PRODUCT_IMAGE_BUCKET)
+            .getPublicUrl(path)
+
+          imageUrl = publicUrl
+        }
       }
 
       await onSave({ ...form, image: imageUrl })
@@ -163,9 +285,9 @@ export function ProductModal({
 
   const isEdit = !!product
   const showClientSelector = role === "admin" && !isEdit && clients.length > 0
-
-  // What to show in the image slot
   const displayImage = imagePreview ?? form.image
+
+  // ── Render ────────────────────────────────────────────────────
 
   return (
     <Modal
@@ -187,7 +309,7 @@ export function ProductModal({
           <button
             form="product-form"
             type="submit"
-            disabled={saving}
+            disabled={saving || compressing}
             className="px-4 py-2 text-[13px] font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-60"
           >
             {saving ? "Saving…" : isEdit ? "Save Changes" : "Add Product"}
@@ -196,13 +318,18 @@ export function ProductModal({
       }
     >
       <form id="product-form" onSubmit={handleSubmit} className="space-y-4">
-        {/* Image */}
+        {/* ── Image ─────────────────────────────────────────── */}
         <div>
           <label className="block text-[12px] font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
             Product Image
           </label>
           <div className="flex items-center gap-4">
-            {displayImage ? (
+            {/* Thumbnail / placeholder */}
+            {compressing ? (
+              <div className="size-16 shrink-0 rounded-lg border-2 border-dashed border-blue-300 flex items-center justify-center bg-blue-50">
+                <div className="size-5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+              </div>
+            ) : displayImage ? (
               <div className="relative shrink-0">
                 <Image
                   src={displayImage}
@@ -227,23 +354,35 @@ export function ProductModal({
               </div>
             )}
 
+            {/* Controls */}
             <div className="flex flex-col gap-1 min-w-0">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="self-start text-[13px] font-medium text-blue-600 hover:text-blue-700"
-              >
-                {displayImage ? "Change image" : "Upload image"}
-              </button>
-              {imageFile && (
-                <p className="text-[11px] text-gray-400 truncate max-w-[220px]">
-                  {imageFile.name}
+              {compressing ? (
+                <p className="text-[13px] text-blue-600 font-medium">Compressing…</p>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="self-start text-[13px] font-medium text-blue-600 hover:text-blue-700"
+                >
+                  {displayImage ? "Change image" : "Upload image"}
+                </button>
+              )}
+
+              {/* Compressed size badge */}
+              {imageSize !== null && !compressing && (
+                <p className="text-[11px] text-gray-500">
+                  Compressed · {formatBytes(imageSize)}
                 </p>
               )}
+
+              {/* Validation / compression error */}
               {imageError && (
                 <p className="text-[11px] text-red-500">{imageError}</p>
               )}
-              <p className="text-[11px] text-gray-400">JPG, PNG, WebP · max 5 MB</p>
+
+              <p className="text-[11px] text-gray-400">
+                JPG, PNG, WebP · resized to 1200 px · WebP output
+              </p>
             </div>
 
             <input
@@ -256,7 +395,7 @@ export function ProductModal({
           </div>
         </div>
 
-        {/* Name */}
+        {/* ── Name ──────────────────────────────────────────── */}
         <div>
           <label className="block text-[12px] font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
             Product Name <span className="text-red-500">*</span>
@@ -271,7 +410,7 @@ export function ProductModal({
           />
         </div>
 
-        {/* SKU + Status */}
+        {/* ── SKU + Status ───────────────────────────────────── */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div>
             <label className="block text-[12px] font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
@@ -300,7 +439,7 @@ export function ProductModal({
           </div>
         </div>
 
-        {/* ASIN / UPC */}
+        {/* ── ASIN / UPC ────────────────────────────────────── */}
         <div>
           <label className="block text-[12px] font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
             ASIN / UPC
@@ -314,7 +453,7 @@ export function ProductModal({
           />
         </div>
 
-        {/* FNSKU */}
+        {/* ── FNSKU ─────────────────────────────────────────── */}
         <div>
           <label className="block text-[12px] font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
             FNSKU
@@ -328,7 +467,7 @@ export function ProductModal({
           />
         </div>
 
-        {/* Notes */}
+        {/* ── Notes ─────────────────────────────────────────── */}
         <div>
           <label className="block text-[12px] font-semibold text-gray-600 mb-1.5 uppercase tracking-wide">
             Notes
@@ -342,7 +481,7 @@ export function ProductModal({
           />
         </div>
 
-        {/* Admin-only section */}
+        {/* ── Admin-only section ────────────────────────────── */}
         {role === "admin" && (
           <div className="rounded-lg border border-blue-200 bg-blue-50/50 p-4 space-y-3">
             <p className="text-[11px] font-bold text-blue-600 uppercase tracking-wide">
@@ -360,13 +499,9 @@ export function ProductModal({
                   onChange={(e) => set("clientId", e.target.value)}
                   className="w-full px-3 py-2 text-[13px] border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
                 >
-                  <option value="" disabled>
-                    Select a client…
-                  </option>
+                  <option value="" disabled>Select a client…</option>
                   {clients.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
+                    <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
                 </select>
               </div>
@@ -402,7 +537,7 @@ export function ProductModal({
           </div>
         )}
 
-        {/* Save error */}
+        {/* ── Save error ────────────────────────────────────── */}
         {saveError && (
           <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5">
             <AlertCircle className="size-3.5 text-red-500 mt-0.5 shrink-0" />
