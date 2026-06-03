@@ -223,42 +223,30 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
     setDraft(structuredClone(invoice)); setEditing(false); setSaveError("")
   }
 
-  /* ── PDF download — html2pdf.js generates a real PDF file ── */
+  /* ── PDF download — server-side route, works on all devices ── */
   async function handleDownloadPdf() {
     if (!draft) return
     setPdfError("")
     setPdfLoading(true)
-    let container: HTMLDivElement | null = null
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const html2pdf = ((await import("html2pdf.js")) as any).default
-      const fullHtml = buildInvoiceHtml(draft, co, "pdf")
-      // Extract body content from the full HTML document
-      const bodyMatch = fullHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i)
-      const bodyHtml  = bodyMatch?.[1] ?? fullHtml
-
-      // Mount off-screen so html2canvas can measure/render it
-      container = document.createElement("div")
-      container.style.cssText =
-        "position:absolute;left:-9999px;top:0;width:800px;background:#fff;" +
-        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111827"
-      container.innerHTML = bodyHtml
-      document.body.appendChild(container)
-
-      await html2pdf()
-        .set({
-          margin:      [10, 10, 10, 10],
-          filename:    `invoice-${draft.invoiceNumber}.pdf`,
-          image:       { type: "jpeg", quality: 0.98 },
-          html2canvas: { scale: 2, useCORS: true, logging: false },
-          jsPDF:       { unit: "mm", format: "a4", orientation: "portrait" },
-        })
-        .from(container)
-        .save()
+      const res = await fetch(`/api/invoices/${draft.id}/pdf`)
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({})) as { error?: string }
+        if (res.status === 403) throw new Error("You do not have access to this invoice.")
+        throw new Error(json.error ?? "Unable to download invoice.")
+      }
+      const blob = await res.blob()
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement("a")
+      a.href     = url
+      a.download = `invoice-${draft.invoiceNumber}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
     } catch (err) {
-      setPdfError(err instanceof Error ? err.message : "Failed to generate PDF.")
+      setPdfError(err instanceof Error ? err.message : "Unable to download invoice.")
     } finally {
-      if (container && document.body.contains(container)) document.body.removeChild(container)
       setPdfLoading(false)
     }
   }

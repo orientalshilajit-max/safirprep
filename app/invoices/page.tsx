@@ -15,7 +15,7 @@ import { StatusBadge } from "@/components/ui/status-badge"
 import { IconButton } from "@/components/ui/icon-button"
 import { EmptyState } from "@/components/ui/empty-state"
 import { StatCard } from "@/components/ui/stat-card"
-import { InvoiceModal, buildInvoiceHtml } from "@/components/invoices/invoice-modal"
+import { InvoiceModal } from "@/components/invoices/invoice-modal"
 import type { Invoice, InvoiceStatus, DataTableColumn } from "@/lib/types"
 
 const PAGE_SIZE = 8
@@ -184,36 +184,26 @@ export default function InvoicesPage() {
   async function handleDownloadPdf(inv: Invoice) {
     if (downloadingId) return
     setDownloadingId(inv.id)
-    let container: HTMLDivElement | null = null
     try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const html2pdf = ((await import("html2pdf.js")) as any).default
-      const fullHtml = buildInvoiceHtml(inv, companyInfo, "pdf")
-      const bodyMatch = fullHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i)
-      const bodyHtml  = bodyMatch?.[1] ?? fullHtml
-
-      container = document.createElement("div")
-      container.style.cssText =
-        "position:absolute;left:-9999px;top:0;width:800px;background:#fff;" +
-        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111827"
-      container.innerHTML = bodyHtml
-      document.body.appendChild(container)
-
-      await html2pdf()
-        .set({
-          margin:      [10, 10, 10, 10],
-          filename:    `invoice-${inv.invoiceNumber}.pdf`,
-          image:       { type: "jpeg", quality: 0.98 },
-          html2canvas: { scale: 2, useCORS: true, logging: false },
-          jsPDF:       { unit: "mm", format: "a4", orientation: "portrait" },
-        })
-        .from(container)
-        .save()
+      const res = await fetch(`/api/invoices/${inv.id}/pdf`)
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({})) as { error?: string }
+        if (res.status === 403) throw new Error("You do not have access to this invoice.")
+        throw new Error(json.error ?? "Unable to download invoice.")
+      }
+      const blob = await res.blob()
+      const url  = URL.createObjectURL(blob)
+      const a    = document.createElement("a")
+      a.href     = url
+      a.download = `invoice-${inv.invoiceNumber}.pdf`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
     } catch (err) {
       console.error("[handleDownloadPdf]", err)
-      flash("Unable to download invoice.", true)
+      flash(err instanceof Error ? err.message : "Unable to download invoice.", true)
     } finally {
-      if (container && document.body.contains(container)) document.body.removeChild(container)
       setDownloadingId(null)
     }
   }
