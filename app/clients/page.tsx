@@ -24,6 +24,7 @@ import {
   restoreClient,
   deleteClientPermanently,
   sendInvite,
+  resendInvite,
   resetPassword,
   disableLogin,
   enableLogin,
@@ -267,16 +268,42 @@ export default function ClientsPage() {
     }
   }
 
+  /* ── Resend invite (dedicated — uses resendInvite action) ─── */
+  async function handleResendInvite(c: Client) {
+    const key = `${c.id}:invite`
+    if (isMockMode) {
+      const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+      setClients((prev) =>
+        prev.map((x) =>
+          x.id === c.id
+            ? { ...x, loginStatus: "Invite Sent", invitedAt: x.invitedAt ?? now,
+                lastInviteSentAt: now, inviteCount: (x.inviteCount ?? 0) + 1 }
+            : x
+        )
+      )
+      flashSuccess("Setup link sent successfully.")
+      return
+    }
+    setLoadingKey(key)
+    try {
+      const result = await resendInvite(c.id)
+      if (!result.ok) { flashError(result.error); return }
+      setClients((prev) => prev.map((x) => x.id === result.client.id ? result.client : x))
+      flashSuccess("Setup link sent successfully.")
+    } finally {
+      setLoadingKey(null)
+    }
+  }
+
   /* ── Reset password ───────────────────────────────────────── */
   async function handleResetPassword(c: Client) {
     const key = `${c.id}:reset`
     if (isMockMode) { flashSuccess("Password reset email sent successfully."); return }
     setLoadingKey(key)
     try {
-      await resetPassword(c.id)
+      const result = await resetPassword(c.id)
+      if (!result.ok) { flashError(result.error); return }
       flashSuccess("Password reset email sent successfully.")
-    } catch (err) {
-      flashError(err instanceof Error ? err.message : "Could not send password reset.")
     } finally {
       setLoadingKey(null)
     }
@@ -444,7 +471,7 @@ export default function ClientsPage() {
             {ls === "Invite Sent" && (<>
               <IconButton variant="primary"
                 title={`Resend Invite${row.lastInviteSentAt ? ` (last: ${row.lastInviteSentAt})` : ""}`}
-                disabled={rowBusy} onClick={() => handleSendInvite(row)}>
+                disabled={rowBusy} onClick={() => handleResendInvite(row)}>
                 {inviteLoading ? <Spinner /> : <MailCheck className="size-3.5" />}
               </IconButton>
               <IconButton variant="default" title="Send Password Reset"
@@ -476,7 +503,7 @@ export default function ClientsPage() {
                 {enableLoading ? <Spinner /> : <UserCheck className="size-3.5" />}
               </IconButton>
               <IconButton variant="primary" title="Send Invite Again"
-                disabled={rowBusy} onClick={() => handleSendInvite(row)}>
+                disabled={rowBusy} onClick={() => handleResendInvite(row)}>
                 {inviteLoading ? <Spinner /> : <Mail className="size-3.5" />}
               </IconButton>
             </>)}
@@ -679,7 +706,7 @@ export default function ClientsPage() {
                           </IconButton>
                         )}
                         {c.loginStatus === "Invite Sent" && (
-                          <IconButton variant="primary" title="Resend Invite" disabled={busy} onClick={() => handleSendInvite(c)}>
+                          <IconButton variant="primary" title="Resend Invite" disabled={busy} onClick={() => handleResendInvite(c)}>
                             {loadingKey === `${c.id}:invite` ? <Sp /> : <MailCheck className="size-3.5" />}
                           </IconButton>
                         )}

@@ -329,33 +329,158 @@ export async function sendInvite(clientId: string): Promise<Client> {
   return mapRow(updated as unknown as DbClientRow)
 }
 
+// ── resendInvite ──────────────────────────────────────────────
+// Re-sends access to an already-invited client.  Never throws — always
+// returns a discriminated union so the caller can show the exact error.
+//
+// Strategy:
+//   • No auth user yet  → inviteUserByEmail (creates account + sends invite link)
+//   • Auth user exists  → resetPasswordForEmail (re-inviting an existing user is rejected
+//                         by Supabase; a password-setup link achieves the same goal)
+
+export async function resendInvite(
+  clientId: string
+): Promise<{ ok: true; client: Client } | { ok: false; error: string }> {
+  try {
+    const { supabase } = await requireAdmin()
+    const adminClient  = createServerAdminClient()
+
+    const { data: row, error: gErr } = await supabase
+      .from("clients")
+      .select(CLIENT_SELECT)
+      .eq("id", clientId)
+      .single()
+    if (gErr) return { ok: false, error: gErr.message }
+
+    const clientRow = row as unknown as DbClientRow
+    const email     = clientRow.email
+
+    // Guard: never invite admin accounts
+    const { data: usersPage } = await adminClient.auth.admin.listUsers({ perPage: 1000 })
+    const match = (usersPage?.users ?? []).find(
+      (u) => u.email?.toLowerCase() === email.toLowerCase()
+    )
+    if (match?.app_metadata?.role === "admin") {
+      return { ok: false, error: "This email belongs to an admin account." }
+    }
+
+    const siteUrl    = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL
+    const redirectTo = siteUrl ? `${siteUrl}/set-password` : undefined
+
+    let authUserId: string
+
+    if (!match) {
+      // No auth user — create one via invite
+      const { data: inv, error: invErr } = await adminClient.auth.admin.inviteUserByEmail(
+        email,
+        { redirectTo }
+      )
+      if (invErr) {
+        console.error("[resendInvite] new invite failed", { clientId, email, error: invErr.message })
+        return { ok: false, error: invErr.message }
+      }
+      authUserId = inv.user.id
+    } else {
+      // Auth user already exists (confirmed or not) — calling inviteUserByEmail again
+      // returns "A user with this email address has already been registered".
+      // Send a password-setup email instead; it works for both cases.
+      const { error: resetErr } = await adminClient.auth.resetPasswordForEmail(
+        email,
+        { redirectTo }
+      )
+      if (resetErr) {
+        console.error("[resendInvite] setup link failed", { clientId, email, error: resetErr.message })
+        return { ok: false, error: resetErr.message }
+      }
+      authUserId = match.id
+    }
+
+    // Ensure correct metadata
+    await adminClient.auth.admin.updateUserById(authUserId, {
+      app_metadata: { role: "client", client_id: clientId },
+    })
+
+    // Update invite tracking in the DB
+    const now = new Date().toISOString()
+    const { data: updated, error: uErr } = await supabase
+      .from("clients")
+      .update({
+        auth_user_id:        authUserId,
+        login_status:        "invited",
+        invited_at:          clientRow.invited_at ?? now,
+        last_invite_sent_at: now,
+        invite_count:        (clientRow.invite_count ?? 0) + 1,
+      })
+      .eq("id", clientId)
+      .select(CLIENT_SELECT)
+      .single()
+    if (uErr) {
+      console.error("[resendInvite] db update failed", { clientId, error: uErr.message })
+      return { ok: false, error: uErr.message }
+    }
+
+    return { ok: true, client: mapRow(updated as unknown as DbClientRow) }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "An unexpected error occurred."
+    console.error("[resendInvite] unexpected error", { clientId, error: msg })
+    return { ok: false, error: msg }
+  }
+}
+
 // ── resetPassword ─────────────────────────────────────────────
-// Triggers a password-reset email for an active client user.
+// Sends a password-reset (or invite) email for a client user.
+//
+// Uses auth.resetPasswordForEmail — not generateLink — because generateLink
+// generates the token but does NOT reliably trigger email delivery in all
+// Supabase configurations.  resetPasswordForEmail always sends the email.
+//
+// Never throws — returns a discriminated union.
 
-export async function resetPassword(clientId: string): Promise<void> {
-  const { supabase } = await requireAdmin()
-  const adminClient  = createServerAdminClient()
+export async function resetPassword(
+  clientId: string
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const { supabase } = await requireAdmin()
+    const adminClient  = createServerAdminClient()
 
-  const { data: client, error: gErr } = await supabase
-    .from("clients")
-    .select("email")
-    .eq("id", clientId)
-    .single()
-  if (gErr) throw new Error(gErr.message)
+    const { data: row, error: gErr } = await supabase
+      .from("clients")
+      .select("email, auth_user_id")
+      .eq("id", clientId)
+      .single()
+    if (gErr) return { ok: false, error: gErr.message }
 
-  const email   = (client as { email: string }).email
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL
+    const { email, auth_user_id } = row as { email: string; auth_user_id: string | null }
+    const siteUrl    = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL
+    const redirectTo = siteUrl ? `${siteUrl}/set-password` : undefined
 
-  // generateLink with type "recovery" sends the password-reset email via
-  // Supabase's configured SMTP and returns the magic link.
-  const { error } = await adminClient.auth.admin.generateLink({
-    type:    "recovery",
-    email,
-    options: { redirectTo: siteUrl ? `${siteUrl}/set-password` : undefined },
-  })
-  if (error) {
-    console.error("[resetPassword] failed", { clientId, email, error: error.message })
-    throw new Error(error.message)
+    if (auth_user_id) {
+      // Auth user exists — send a password reset email
+      const { error: resetErr } = await adminClient.auth.resetPasswordForEmail(
+        email,
+        { redirectTo }
+      )
+      if (resetErr) {
+        console.error("[resetPassword] failed", { clientId, email, error: resetErr.message })
+        return { ok: false, error: resetErr.message }
+      }
+    } else {
+      // No auth user yet — send an invite so they can create their account
+      const { error: invErr } = await adminClient.auth.admin.inviteUserByEmail(
+        email,
+        { redirectTo }
+      )
+      if (invErr) {
+        console.error("[resetPassword] invite fallback failed", { clientId, email, error: invErr.message })
+        return { ok: false, error: invErr.message }
+      }
+    }
+
+    return { ok: true }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "An unexpected error occurred."
+    console.error("[resetPassword] unexpected error", { clientId, error: msg })
+    return { ok: false, error: msg }
   }
 }
 
