@@ -167,13 +167,15 @@ export type ServiceRequest = {
   inventoryDeducted?: boolean
 }
 
-export type InvoiceStatus = "Unpaid" | "Paid" | "Overdue" | "Void"
+export type InvoiceStatus = "Unpaid" | "Paid" | "Overdue" | "Void" | "Combined"
 
 export type InvoiceLineItem = {
   id: string
   description: string
   quantity: number
   unitPrice: number
+  productName?: string
+  serviceName?: string
 }
 
 export type Invoice = {
@@ -189,6 +191,8 @@ export type Invoice = {
   lineItems: InvoiceLineItem[]
   notes: string
   relatedRequestNumber?: string
+  /** If set, this invoice was merged into the combined invoice with this ID. */
+  combinedIntoInvoiceId?: string
   /** ISO timestamp — present in Supabase mode, absent in mock mode. Used for date-based revenue filtering. */
   createdAt?: string
 }

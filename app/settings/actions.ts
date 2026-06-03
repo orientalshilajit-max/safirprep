@@ -271,15 +271,21 @@ export async function saveLogoUrl(url: string): Promise<void> {
 
 // ── Public company branding (no auth — for sidebar + login) ───
 
-export async function fetchPublicCompanyBranding(): Promise<{
+export type CompanyBranding = {
   companyName: string
-  logoUrl: string | null
-}> {
+  logoUrl:     string | null
+  address:     string | null
+  email:       string | null
+  phone:       string | null
+  website:     string | null
+}
+
+export async function fetchPublicCompanyBranding(): Promise<CompanyBranding> {
   try {
     const admin = createServerAdminClient()
     const { data } = await admin
       .from("company_settings")
-      .select("company_name, logo_url")
+      .select("company_name, logo_url, address, email, phone, website")
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle()
@@ -287,9 +293,13 @@ export async function fetchPublicCompanyBranding(): Promise<{
     return {
       companyName: data?.company_name ?? "Safir Logistics",
       logoUrl:     data?.logo_url    ?? null,
+      address:     data?.address     ?? null,
+      email:       data?.email       ?? null,
+      phone:       data?.phone       ?? null,
+      website:     data?.website     ?? null,
     }
   } catch {
-    return { companyName: "Safir Logistics", logoUrl: null }
+    return { companyName: "Safir Logistics", logoUrl: null, address: null, email: null, phone: null, website: null }
   }
 }
 

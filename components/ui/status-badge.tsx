@@ -23,6 +23,7 @@ const variants: Record<string, string> = {
   Paid:                 "text-green-700 bg-green-50 ring-green-200",
   Overdue:              "text-red-700 bg-red-50 ring-red-200",
   Void:                 "text-gray-400 bg-gray-100 ring-gray-200",
+  Combined:             "text-violet-700 bg-violet-50 ring-violet-200",
   /* Client */
   Inactive:             "text-slate-500 bg-slate-100 ring-slate-200",
   /* Login Status */
