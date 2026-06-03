@@ -25,21 +25,43 @@ export async function uploadProductImage(formData: FormData): Promise<string> {
   const isAdmin  = user.app_metadata?.role === "admin"
   const clientId = isAdmin
     ? ((formData.get("clientId") as string | null) ?? "unknown")
-    : ((user.app_metadata?.client_id as string | undefined) ?? "unknown")
+    : ((user.app_metadata?.client_id as string | undefined) ?? null)
 
-  const productId = (formData.get("productId") as string | null) ?? crypto.randomUUID()
-  const ext       = file.name.split(".").pop()?.toLowerCase() ?? "jpg"
-  const path      = `${clientId}/${productId}/${crypto.randomUUID()}.${ext}`
+  // For clients, client_id must be present in the JWT so the storage policy
+  // can verify the upload path belongs to them.
+  if (!isAdmin && !clientId) {
+    throw new Error(
+      "Client ID not found in your session. Please log out and log in again, " +
+      "or ask your administrator to re-send your invite."
+    )
+  }
 
-  const { error: upErr } = await adminClient.storage
+  const effectiveClientId = clientId ?? "unknown"
+  const productId         = (formData.get("productId") as string | null) ?? crypto.randomUUID()
+  const ext               = file.name.split(".").pop()?.toLowerCase() ?? "jpg"
+  const path              = `${effectiveClientId}/${productId}/${crypto.randomUUID()}.${ext}`
+
+  console.log("[uploadProductImage]", { isAdmin, clientId: effectiveClientId, path })
+
+  // Admin → service-role client (bypasses all storage policies; can upload anywhere).
+  // Client → SSR client with user JWT (storage policies enforce own-folder restriction).
+  const storageClient = isAdmin ? adminClient : supabase
+
+  const { error: upErr } = await storageClient.storage
     .from(PRODUCT_IMAGE_BUCKET)
     .upload(path, file, { contentType: file.type, upsert: true })
-  if (upErr) throw new Error(upErr.message)
 
+  if (upErr) {
+    console.error("[uploadProductImage] upload failed", { path, error: upErr.message })
+    throw new Error(upErr.message)
+  }
+
+  // Always use the admin client for getPublicUrl — it doesn't require auth.
   const { data: { publicUrl } } = adminClient.storage
     .from(PRODUCT_IMAGE_BUCKET)
     .getPublicUrl(path)
 
+  console.log("[uploadProductImage] success", { publicUrl })
   return publicUrl
 }
 
