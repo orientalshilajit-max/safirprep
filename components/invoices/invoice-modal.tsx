@@ -52,7 +52,7 @@ export type InvoiceCompanyInfo = {
 
 // ── PDF generation ────────────────────────────────────────────
 
-function buildInvoiceHtml(inv: Invoice, co: InvoiceCompanyInfo, mode: "print" | "pdf" = "print"): string {
+export function buildInvoiceHtml(inv: Invoice, co: InvoiceCompanyInfo, mode: "print" | "pdf" = "print"): string {
   const logoSrc = co.invoiceLogoUrl || co.logoUrl
   const total   = invoiceTotal(inv.lineItems)
 

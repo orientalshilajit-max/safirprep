@@ -15,7 +15,7 @@ import { StatusBadge } from "@/components/ui/status-badge"
 import { IconButton } from "@/components/ui/icon-button"
 import { EmptyState } from "@/components/ui/empty-state"
 import { StatCard } from "@/components/ui/stat-card"
-import { InvoiceModal } from "@/components/invoices/invoice-modal"
+import { InvoiceModal, buildInvoiceHtml } from "@/components/invoices/invoice-modal"
 import type { Invoice, InvoiceStatus, DataTableColumn } from "@/lib/types"
 
 const PAGE_SIZE = 8
@@ -49,6 +49,7 @@ export default function InvoicesPage() {
   const [statusDropdown, setStatusDropdown] = useState<{ id: string; top: number; left: number } | null>(null)
   const [actionMsg,      setActionMsg]      = useState<{ text: string; isError: boolean } | null>(null)
   const [combining,      setCombining]      = useState(false)
+  const [downloadingId,  setDownloadingId]  = useState<string | null>(null)
 
   function flash(text: string, isError = false) {
     setActionMsg({ text, isError })
@@ -180,6 +181,43 @@ export default function InvoicesPage() {
     paymentInstructions: branding.companyPaymentInstructions,
   }
 
+  async function handleDownloadPdf(inv: Invoice) {
+    if (downloadingId) return
+    setDownloadingId(inv.id)
+    let container: HTMLDivElement | null = null
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const html2pdf = ((await import("html2pdf.js")) as any).default
+      const fullHtml = buildInvoiceHtml(inv, companyInfo, "pdf")
+      const bodyMatch = fullHtml.match(/<body[^>]*>([\s\S]*?)<\/body>/i)
+      const bodyHtml  = bodyMatch?.[1] ?? fullHtml
+
+      container = document.createElement("div")
+      container.style.cssText =
+        "position:absolute;left:-9999px;top:0;width:800px;background:#fff;" +
+        "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;color:#111827"
+      container.innerHTML = bodyHtml
+      document.body.appendChild(container)
+
+      await html2pdf()
+        .set({
+          margin:      [10, 10, 10, 10],
+          filename:    `invoice-${inv.invoiceNumber}.pdf`,
+          image:       { type: "jpeg", quality: 0.98 },
+          html2canvas: { scale: 2, useCORS: true, logging: false },
+          jsPDF:       { unit: "mm", format: "a4", orientation: "portrait" },
+        })
+        .from(container)
+        .save()
+    } catch (err) {
+      console.error("[handleDownloadPdf]", err)
+      flash("Unable to download invoice.", true)
+    } finally {
+      if (container && document.body.contains(container)) document.body.removeChild(container)
+      setDownloadingId(null)
+    }
+  }
+
   /* ── Columns ── */
   const checkboxCol: DataTableColumn<Invoice> = {
     id: "select",
@@ -262,7 +300,9 @@ export default function InvoicesPage() {
           <IconButton variant="primary" title="View Invoice" onClick={() => setViewing(row)}>
             <Eye className="size-3.5" />
           </IconButton>
-          <IconButton variant="default" title="Download PDF" onClick={() => {}}>
+          <IconButton variant="default" title="Download PDF"
+            disabled={downloadingId === row.id}
+            onClick={(e) => { e.stopPropagation(); void handleDownloadPdf(row) }}>
             <Download className="size-3.5" />
           </IconButton>
         </div>
@@ -410,7 +450,9 @@ export default function InvoicesPage() {
                   <IconButton variant="primary" title="View Invoice" onClick={() => setViewing(inv)}>
                     <Eye className="size-3.5" />
                   </IconButton>
-                  <IconButton variant="default" title="Download PDF" onClick={() => {}}>
+                  <IconButton variant="default" title="Download PDF"
+                    disabled={downloadingId === inv.id}
+                    onClick={(e) => { e.stopPropagation(); void handleDownloadPdf(inv) }}>
                     <Download className="size-3.5" />
                   </IconButton>
                 </div>
