@@ -16,6 +16,7 @@ import {
   saveCompanyInfo,
   uploadLogo,
   saveLogoUrl,
+  saveInvoiceLogoUrl,
   upsertCarrier,
   deleteCarrier,
   checkCarrierUsage,
@@ -991,10 +992,13 @@ export default function SettingsPage() {
   const [loading,       setLoading]       = useState(() => !isMockMode)
   const [loadError,     setLoadError]     = useState<string | null>(null)
   const [company,       setCompany]       = useState<SettingsCompany>(DEFAULT_COMPANY)
-  const [logoPreview,   setLogoPreview]   = useState<string | null>(null)
-  const [logoUploading, setLogoUploading] = useState(false)
-  const [logoError,     setLogoError]     = useState<string | null>(null)
-  const [invoice,       setInvoice]       = useState<SettingsInvoice>(DEFAULT_INVOICE)
+  const [logoPreview,          setLogoPreview]          = useState<string | null>(null)
+  const [logoUploading,        setLogoUploading]        = useState(false)
+  const [logoError,            setLogoError]            = useState<string | null>(null)
+  const [invoiceLogoPreview,   setInvoiceLogoPreview]   = useState<string | null>(null)
+  const [invoiceLogoUploading, setInvoiceLogoUploading] = useState(false)
+  const [invoiceLogoError,     setInvoiceLogoError]     = useState<string | null>(null)
+  const [invoice,              setInvoice]              = useState<SettingsInvoice>(DEFAULT_INVOICE)
   const [userSettings,  setUserSettings]  = useState<SettingsUsers>(DEFAULT_USERS)
   const [initCarriers,  setInitCarriers]  = useState<SettingsCarrier[]>([])
   const [initServices,  setInitServices]  = useState<SettingsServiceType[]>([])
@@ -1003,7 +1007,8 @@ export default function SettingsPage() {
   const companySave = useSaveFlash()
   const invoiceSave = useSaveFlash()
   const userSave    = useSaveFlash()
-  const logoFileRef = useRef<HTMLInputElement>(null)
+  const logoFileRef        = useRef<HTMLInputElement>(null)
+  const invoiceLogoFileRef = useRef<HTMLInputElement>(null)
 
   // Load settings from DB on mount (mock mode skips fetch; loading already false)
   useEffect(() => {
@@ -1012,6 +1017,7 @@ export default function SettingsPage() {
       .then((s) => {
         setCompany(s.company)
         setLogoPreview(s.company.logoUrl)
+        setInvoiceLogoPreview((s.company as Record<string, unknown>).invoiceLogoUrl as string | null ?? null)
         setInvoice(s.invoice)
         setUserSettings(s.users)
         setInitCarriers(s.carriers)
@@ -1070,6 +1076,42 @@ export default function SettingsPage() {
       setLogoPreview(company.logoUrl)
     } finally {
       setLogoUploading(false)
+    }
+  }
+
+  /* ── Invoice logo upload ── */
+  async function handleInvoiceLogoChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ""
+
+    const allowed = ["image/jpeg", "image/jpg", "image/png", "image/webp", "image/svg+xml"]
+    if (!allowed.includes(file.type)) {
+      setInvoiceLogoError("Only JPG, PNG, WebP, and SVG files are allowed.")
+      return
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setInvoiceLogoError("Invoice logo must be under 5 MB.")
+      return
+    }
+
+    setInvoiceLogoPreview(URL.createObjectURL(file))
+    setInvoiceLogoError(null)
+
+    if (isMockMode) return
+
+    setInvoiceLogoUploading(true)
+    try {
+      const fd = new FormData()
+      fd.set("file", file)
+      const url = await uploadLogo(fd)
+      await saveInvoiceLogoUrl(url)
+      setInvoiceLogoPreview(url)
+    } catch (err) {
+      setInvoiceLogoError(err instanceof Error ? err.message : "Upload failed.")
+      setInvoiceLogoPreview(null)
+    } finally {
+      setInvoiceLogoUploading(false)
     }
   }
 
@@ -1301,6 +1343,63 @@ export default function SettingsPage() {
           description="Default values applied to all new invoices"
         >
           <div className="space-y-4">
+            {/* Invoice logo */}
+            <Field label="Invoice Logo" hint="Dark-colored logo shown on invoice previews and PDFs (white background). Upload separately from your sidebar logo.">
+              <div className="flex items-start gap-4">
+                <div className="flex size-16 shrink-0 items-center justify-center rounded-xl border-2 border-dashed border-gray-200 bg-gray-50 overflow-hidden">
+                  {invoiceLogoPreview ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={invoiceLogoPreview} alt="Invoice logo" className="size-full object-contain p-1" />
+                  ) : (
+                    <ImagePlus className="size-6 text-gray-300" />
+                  )}
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => invoiceLogoFileRef.current?.click()}
+                      disabled={invoiceLogoUploading}
+                      className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                    >
+                      <Plus className="size-3.5" />
+                      {invoiceLogoUploading ? "Uploading…" : invoiceLogoPreview ? "Replace" : "Upload Invoice Logo"}
+                    </button>
+                    {invoiceLogoPreview && !invoiceLogoUploading && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          setInvoiceLogoPreview(null)
+                          if (!isMockMode) { try { await saveInvoiceLogoUrl("") } catch { /* best-effort */ } }
+                        }}
+                        className="flex items-center gap-1 px-2 py-1.5 text-[12px] text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      >
+                        <X className="size-3.5" /> Remove
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-gray-400">JPG, PNG, WebP, or SVG — max 5 MB</p>
+                  {invoiceLogoUploading && <p className="text-[11px] text-blue-600">Uploading and saving…</p>}
+                  {!invoiceLogoUploading && invoiceLogoPreview && (
+                    <p className="text-[11px] text-green-600">Invoice logo saved — shown on invoices and PDFs.</p>
+                  )}
+                  {invoiceLogoError && (
+                    <div className="flex items-start gap-1.5 rounded-lg border border-red-100 bg-red-50 px-2.5 py-2 max-w-xs">
+                      <AlertCircle className="size-3.5 text-red-500 mt-0.5 shrink-0" />
+                      <p className="text-[11px] text-red-600 leading-snug">{invoiceLogoError}</p>
+                    </div>
+                  )}
+                </div>
+                <input
+                  ref={invoiceLogoFileRef}
+                  type="file"
+                  accept="image/jpeg,image/jpg,image/png,image/webp,image/svg+xml"
+                  className="hidden"
+                  onChange={handleInvoiceLogoChange}
+                />
+              </div>
+            </Field>
+
             <Field
               label="Default Due Days"
               hint="Number of days after invoice date before payment is due"

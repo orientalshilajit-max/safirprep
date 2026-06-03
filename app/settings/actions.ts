@@ -240,7 +240,7 @@ export async function uploadLogo(formData: FormData): Promise<string> {
   return publicUrl
 }
 
-// ── Save logo URL only (called immediately after upload) ──────
+// ── Save main logo URL ────────────────────────────────────────
 
 export async function saveLogoUrl(url: string): Promise<void> {
   await requireAdmin()
@@ -269,37 +269,75 @@ export async function saveLogoUrl(url: string): Promise<void> {
   revalidatePath("/settings")
 }
 
+// ── Save invoice logo URL (dark-on-white logo for invoice PDFs) ─
+
+export async function saveInvoiceLogoUrl(url: string): Promise<void> {
+  await requireAdmin()
+  const admin = createServerAdminClient()
+
+  const { data: existing } = await admin
+    .from("company_settings")
+    .select("id")
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  // invoice_logo_url added in migration 20260602000002 — mutate to bypass RejectExcessProperties
+  const basePayload = {} as Record<string, unknown>
+  basePayload.invoice_logo_url = url || null
+
+  if (existing?.id) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (admin.from("company_settings") as any)
+      .update(basePayload)
+      .eq("id", existing.id)
+    if (error) throw new Error((error as { message: string }).message)
+  } else {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (admin.from("company_settings") as any)
+      .insert(basePayload)
+    if (error) throw new Error((error as { message: string }).message)
+  }
+
+  revalidatePath("/settings")
+}
+
 // ── Public company branding (no auth — for sidebar + login) ───
 
 export type CompanyBranding = {
-  companyName: string
-  logoUrl:     string | null
-  address:     string | null
-  email:       string | null
-  phone:       string | null
-  website:     string | null
+  companyName:    string
+  logoUrl:        string | null
+  invoiceLogoUrl: string | null
+  address:        string | null
+  email:          string | null
+  phone:          string | null
+  website:        string | null
 }
 
 export async function fetchPublicCompanyBranding(): Promise<CompanyBranding> {
   try {
     const admin = createServerAdminClient()
-    const { data } = await admin
+    // Use select("*") and cast to Record to handle columns added after type generation
+    const { data: rawData } = await admin
       .from("company_settings")
-      .select("company_name, logo_url, address, email, phone, website")
+      .select("*")
       .order("updated_at", { ascending: false })
       .limit(1)
       .maybeSingle()
 
+    const data = rawData as Record<string, unknown> | null
+
     return {
-      companyName: data?.company_name ?? "Safir Logistics",
-      logoUrl:     data?.logo_url    ?? null,
-      address:     data?.address     ?? null,
-      email:       data?.email       ?? null,
-      phone:       data?.phone       ?? null,
-      website:     data?.website     ?? null,
+      companyName:    String(data?.company_name      ?? "Safir Logistics"),
+      logoUrl:        (data?.logo_url          as string | null) ?? null,
+      invoiceLogoUrl: (data?.invoice_logo_url  as string | null) ?? null,
+      address:        (data?.address           as string | null) ?? null,
+      email:          (data?.email             as string | null) ?? null,
+      phone:          (data?.phone             as string | null) ?? null,
+      website:        (data?.website           as string | null) ?? null,
     }
   } catch {
-    return { companyName: "Safir Logistics", logoUrl: null, address: null, email: null, phone: null, website: null }
+    return { companyName: "Safir Logistics", logoUrl: null, invoiceLogoUrl: null, address: null, email: null, phone: null, website: null }
   }
 }
 

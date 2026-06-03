@@ -44,6 +44,7 @@ type AppContextType = {
   isRefreshing: boolean
   companyName: string
   companyLogoUrl: string | null
+  companyInvoiceLogoUrl: string | null
   companyAddress: string | null
   companyEmail: string | null
   companyPhone: string | null
@@ -71,6 +72,7 @@ const AppContext = createContext<AppContextType>({
   isRefreshing: false,
   companyName: "Safir Logistics",
   companyLogoUrl: null,
+  companyInvoiceLogoUrl: null,
   companyAddress: null,
   companyEmail: null,
   companyPhone: null,
@@ -128,8 +130,8 @@ export function useRefreshAll() {
 }
 
 export function useCompanyBranding() {
-  const { companyName, companyLogoUrl, companyAddress, companyEmail, companyPhone, companyWebsite } = useContext(AppContext)
-  return { companyName, companyLogoUrl, companyAddress, companyEmail, companyPhone, companyWebsite }
+  const { companyName, companyLogoUrl, companyInvoiceLogoUrl, companyAddress, companyEmail, companyPhone, companyWebsite } = useContext(AppContext)
+  return { companyName, companyLogoUrl, companyInvoiceLogoUrl, companyAddress, companyEmail, companyPhone, companyWebsite }
 }
 
 // ── AppShell ──────────────────────────────────────────────────
@@ -157,9 +159,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const [invoices,      setInvoices]      = useState<Invoice[]>(isMockMode ? mockInvoices : [])
   const [clients,       setClients]       = useState<Client[]>(isMockMode ? mockClients : [])
   const [isRefreshing,  setIsRefreshing]  = useState(false)
-  const [companyName,    setCompanyName]    = useState("Safir Logistics")
-  const [companyLogoUrl, setCompanyLogoUrl] = useState<string | null>(null)
-  const [companyAddress, setCompanyAddress] = useState<string | null>(null)
+  const [companyName,          setCompanyName]          = useState("Safir Logistics")
+  const [companyLogoUrl,       setCompanyLogoUrl]       = useState<string | null>(null)
+  const [companyInvoiceLogoUrl, setCompanyInvoiceLogoUrl] = useState<string | null>(null)
+  const [companyAddress,       setCompanyAddress]       = useState<string | null>(null)
   const [companyEmail,   setCompanyEmail]   = useState<string | null>(null)
   const [companyPhone,   setCompanyPhone]   = useState<string | null>(null)
   const [companyWebsite, setCompanyWebsite] = useState<string | null>(null)
@@ -195,6 +198,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       setClients(clientsData)
       setCompanyName(brandingData.companyName)
       setCompanyLogoUrl(brandingData.logoUrl)
+      setCompanyInvoiceLogoUrl(brandingData.invoiceLogoUrl)
       setCompanyAddress(brandingData.address)
       setCompanyEmail(brandingData.email)
       setCompanyPhone(brandingData.phone)
@@ -332,6 +336,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         isRefreshing,
         companyName,
         companyLogoUrl,
+        companyInvoiceLogoUrl,
         companyAddress,
         companyEmail,
         companyPhone,
