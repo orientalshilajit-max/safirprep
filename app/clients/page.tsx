@@ -6,7 +6,7 @@ import {
   Mail, MailCheck, KeyRound, UserMinus,
   Users, UserCheck, UserX, UserPlus,
   ChevronLeft, ChevronRight,
-  AlertCircle, Archive, ArchiveRestore,
+  AlertCircle, CheckCircle, Archive, ArchiveRestore,
 } from "lucide-react"
 import { useRole, useClients, useIsMockMode } from "@/components/layout/app-shell"
 import { DataTable } from "@/components/ui/data-table"
@@ -66,8 +66,10 @@ export default function ClientsPage() {
   const [editing,      setEditing]      = useState<Client | null>(null)
   const [archiveTarget,         setArchiveTarget]         = useState<Client | null>(null)
   const [permanentDeleteTarget, setPermanentDeleteTarget] = useState<Client | null>(null)
-  const [inviteSent,   setInviteSent]   = useState<string | null>(null)
-  const [actionError,  setActionError]  = useState<string | null>(null)
+  const [actionSuccess, setActionSuccess] = useState<string | null>(null)
+  const [actionError,   setActionError]  = useState<string | null>(null)
+  // Tracks which button is currently loading: "<clientId>:<action>"
+  const [loadingKey,    setLoadingKey]   = useState<string | null>(null)
 
   // Archived clients — loaded lazily in Supabase mode
   const [archivedClients, setArchivedClients] = useState<Client[]>([])
@@ -128,12 +130,14 @@ export default function ClientsPage() {
 
   function flashError(msg: string) {
     setActionError(msg)
-    setTimeout(() => setActionError(null), 4000)
+    setActionSuccess(null)
+    setTimeout(() => setActionError(null), 6000)
   }
 
-  function flashSuccess(clientId: string) {
-    setInviteSent(clientId)
-    setTimeout(() => setInviteSent(null), 2500)
+  function flashSuccess(msg: string) {
+    setActionSuccess(msg)
+    setActionError(null)
+    setTimeout(() => setActionSuccess(null), 5000)
   }
 
   /* ── Tab switch ───────────────────────────────────────────── */
@@ -237,69 +241,80 @@ export default function ClientsPage() {
 
   /* ── Send / resend invite ─────────────────────────────────── */
   async function handleSendInvite(c: Client) {
+    const key = `${c.id}:invite`
     if (isMockMode) {
       const now = new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
       setClients((prev) =>
         prev.map((x) =>
           x.id === c.id
-            ? {
-                ...x,
-                loginStatus:      "Invite Sent",
-                invitedAt:        x.invitedAt ?? now,
-                lastInviteSentAt: now,
-                inviteCount:      (x.inviteCount ?? 0) + 1,
-              }
+            ? { ...x, loginStatus: "Invite Sent", invitedAt: x.invitedAt ?? now,
+                lastInviteSentAt: now, inviteCount: (x.inviteCount ?? 0) + 1 }
             : x
         )
       )
-      flashSuccess(c.id)
+      flashSuccess("Invite sent successfully.")
       return
     }
+    setLoadingKey(key)
     try {
       const updated = await sendInvite(c.id)
       setClients((prev) => prev.map((x) => x.id === updated.id ? updated : x))
-      flashSuccess(c.id)
+      flashSuccess("Invite sent successfully.")
     } catch (err) {
-      flashError(err instanceof Error ? err.message : "Failed to send invite.")
+      flashError(err instanceof Error ? err.message : "Could not send invite.")
+    } finally {
+      setLoadingKey(null)
     }
   }
 
   /* ── Reset password ───────────────────────────────────────── */
   async function handleResetPassword(c: Client) {
-    if (isMockMode) { flashSuccess(c.id); return }
+    const key = `${c.id}:reset`
+    if (isMockMode) { flashSuccess("Password reset email sent successfully."); return }
+    setLoadingKey(key)
     try {
       await resetPassword(c.id)
-      flashSuccess(c.id)
+      flashSuccess("Password reset email sent successfully.")
     } catch (err) {
-      flashError(err instanceof Error ? err.message : "Failed to send password reset.")
+      flashError(err instanceof Error ? err.message : "Could not send password reset.")
+    } finally {
+      setLoadingKey(null)
     }
   }
 
   /* ── Disable login ────────────────────────────────────────── */
   async function handleDisableLogin(c: Client) {
+    const key = `${c.id}:disable`
     if (isMockMode) {
       setClients((prev) => prev.map((x) => x.id === c.id ? { ...x, loginStatus: "Disabled" } : x))
       return
     }
+    setLoadingKey(key)
     try {
       const updated = await disableLogin(c.id)
       setClients((prev) => prev.map((x) => x.id === updated.id ? updated : x))
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to disable login.")
+    } finally {
+      setLoadingKey(null)
     }
   }
 
   /* ── Enable login ─────────────────────────────────────────── */
   async function handleEnableLogin(c: Client) {
+    const key = `${c.id}:enable`
     if (isMockMode) {
       setClients((prev) => prev.map((x) => x.id === c.id ? { ...x, loginStatus: "Active" } : x))
       return
     }
+    setLoadingKey(key)
     try {
       const updated = await enableLogin(c.id)
       setClients((prev) => prev.map((x) => x.id === updated.id ? updated : x))
     } catch (err) {
       flashError(err instanceof Error ? err.message : "Failed to enable login.")
+    } finally {
+      setLoadingKey(null)
     }
   }
 
@@ -396,20 +411,32 @@ export default function ClientsPage() {
       headerClassName: "text-right w-36",
       className: "text-right w-36",
       cell: (row) => {
-        const justSent = inviteSent === row.id
-        const ls = row.loginStatus
+        const ls             = row.loginStatus
+        const inviteLoading  = loadingKey === `${row.id}:invite`
+        const resetLoading   = loadingKey === `${row.id}:reset`
+        const disableLoading = loadingKey === `${row.id}:disable`
+        const enableLoading  = loadingKey === `${row.id}:enable`
+        const rowBusy        = inviteLoading || resetLoading || disableLoading || enableLoading
+
+        function Spinner() {
+          return <div className="size-3 rounded-full border border-current border-t-transparent animate-spin" />
+        }
+
         return (
-          <div className="flex items-center justify-end gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-            <IconButton variant="primary" title="Edit Client" onClick={() => openEdit(row)}>
+          // Keep visible while loading so the spinner stays in view
+          <div className={`flex items-center justify-end gap-0.5 transition-opacity ${
+            rowBusy ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+          }`}>
+            <IconButton variant="primary" title="Edit Client"
+              disabled={rowBusy} onClick={() => openEdit(row)}>
               <Pencil className="size-3.5" />
             </IconButton>
 
             {/* No Login → Send Invite */}
             {ls === "No Login" && (
               <IconButton variant="primary" title="Send Invite"
-                onClick={() => handleSendInvite(row)}
-                className={justSent ? "text-green-600 bg-green-50" : ""}>
-                <Mail className="size-3.5" />
+                disabled={rowBusy} onClick={() => handleSendInvite(row)}>
+                {inviteLoading ? <Spinner /> : <Mail className="size-3.5" />}
               </IconButton>
             )}
 
@@ -417,49 +444,45 @@ export default function ClientsPage() {
             {ls === "Invite Sent" && (<>
               <IconButton variant="primary"
                 title={`Resend Invite${row.lastInviteSentAt ? ` (last: ${row.lastInviteSentAt})` : ""}`}
-                onClick={() => handleSendInvite(row)}
-                className={justSent ? "text-green-600 bg-green-50" : ""}>
-                <MailCheck className="size-3.5" />
+                disabled={rowBusy} onClick={() => handleSendInvite(row)}>
+                {inviteLoading ? <Spinner /> : <MailCheck className="size-3.5" />}
               </IconButton>
               <IconButton variant="default" title="Send Password Reset"
-                onClick={() => handleResetPassword(row)}
-                className={justSent ? "text-green-600 bg-green-50" : ""}>
-                <KeyRound className="size-3.5" />
+                disabled={rowBusy} onClick={() => handleResetPassword(row)}>
+                {resetLoading ? <Spinner /> : <KeyRound className="size-3.5" />}
               </IconButton>
               <IconButton variant="danger" title="Disable Login"
-                onClick={() => handleDisableLogin(row)}>
-                <UserMinus className="size-3.5" />
+                disabled={rowBusy} onClick={() => handleDisableLogin(row)}>
+                {disableLoading ? <Spinner /> : <UserMinus className="size-3.5" />}
               </IconButton>
             </>)}
 
             {/* Active → Password Reset | Disable */}
             {ls === "Active" && (<>
               <IconButton variant="default" title="Send Password Reset"
-                onClick={() => handleResetPassword(row)}
-                className={justSent ? "text-green-600 bg-green-50" : ""}>
-                <KeyRound className="size-3.5" />
+                disabled={rowBusy} onClick={() => handleResetPassword(row)}>
+                {resetLoading ? <Spinner /> : <KeyRound className="size-3.5" />}
               </IconButton>
               <IconButton variant="danger" title="Disable Login"
-                onClick={() => handleDisableLogin(row)}>
-                <UserMinus className="size-3.5" />
+                disabled={rowBusy} onClick={() => handleDisableLogin(row)}>
+                {disableLoading ? <Spinner /> : <UserMinus className="size-3.5" />}
               </IconButton>
             </>)}
 
             {/* Disabled → Enable | Send Invite Again */}
             {ls === "Disabled" && (<>
               <IconButton variant="primary" title="Enable Login"
-                onClick={() => handleEnableLogin(row)}>
-                <UserCheck className="size-3.5" />
+                disabled={rowBusy} onClick={() => handleEnableLogin(row)}>
+                {enableLoading ? <Spinner /> : <UserCheck className="size-3.5" />}
               </IconButton>
               <IconButton variant="primary" title="Send Invite Again"
-                onClick={() => handleSendInvite(row)}
-                className={justSent ? "text-green-600 bg-green-50" : ""}>
-                <Mail className="size-3.5" />
+                disabled={rowBusy} onClick={() => handleSendInvite(row)}>
+                {inviteLoading ? <Spinner /> : <Mail className="size-3.5" />}
               </IconButton>
             </>)}
 
             <IconButton variant="danger" title="Archive Client"
-              onClick={() => setArchiveTarget(row)}>
+              disabled={rowBusy} onClick={() => setArchiveTarget(row)}>
               <Archive className="size-3.5" />
             </IconButton>
           </div>
@@ -515,11 +538,21 @@ export default function ClientsPage() {
         )}
       </div>
 
+      {/* Action success banner */}
+      {actionSuccess && (
+        <div className="flex items-start gap-2 rounded-lg border border-green-100 bg-green-50 px-4 py-3">
+          <CheckCircle className="size-4 text-green-600 mt-0.5 shrink-0" />
+          <p className="text-[13px] text-green-700 flex-1">{actionSuccess}</p>
+          <button onClick={() => setActionSuccess(null)} className="text-gray-400 hover:text-gray-600 text-[12px] ml-auto shrink-0">✕</button>
+        </div>
+      )}
+
       {/* Action error banner */}
       {actionError && (
         <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-4 py-3">
           <AlertCircle className="size-4 text-red-500 mt-0.5 shrink-0" />
-          <p className="text-[13px] text-red-600">{actionError}</p>
+          <p className="text-[13px] text-red-600 flex-1">{actionError}</p>
+          <button onClick={() => setActionError(null)} className="text-gray-400 hover:text-gray-600 text-[12px] ml-auto shrink-0">✕</button>
         </div>
       )}
 
@@ -633,40 +666,43 @@ export default function ClientsPage() {
                     <p className="text-[11px] text-gray-400 truncate">{c.email}</p>
                   </div>
                   <div className="flex items-center gap-0.5 shrink-0">
-                    <IconButton variant="primary" title="Edit Client" onClick={() => openEdit(c)}>
-                      <Pencil className="size-3.5" />
-                    </IconButton>
-                    {c.loginStatus === "No Login" && (
-                      <IconButton variant="primary" title="Send Invite" onClick={() => handleSendInvite(c)}
-                        className={inviteSent === c.id ? "text-green-600 bg-green-50" : ""}>
-                        <Mail className="size-3.5" />
-                      </IconButton>
-                    )}
-                    {c.loginStatus === "Invite Sent" && (
-                      <IconButton variant="primary" title="Resend Invite" onClick={() => handleSendInvite(c)}
-                        className={inviteSent === c.id ? "text-green-600 bg-green-50" : ""}>
-                        <MailCheck className="size-3.5" />
-                      </IconButton>
-                    )}
-                    {(c.loginStatus === "Active" || c.loginStatus === "Invite Sent") && (
-                      <IconButton variant="default" title="Reset Password" onClick={() => handleResetPassword(c)}
-                        className={inviteSent === c.id ? "text-green-600 bg-green-50" : ""}>
-                        <KeyRound className="size-3.5" />
-                      </IconButton>
-                    )}
-                    {(c.loginStatus === "Active" || c.loginStatus === "Invite Sent") && (
-                      <IconButton variant="danger" title="Disable Login" onClick={() => handleDisableLogin(c)}>
-                        <UserMinus className="size-3.5" />
-                      </IconButton>
-                    )}
-                    {c.loginStatus === "Disabled" && (
-                      <IconButton variant="primary" title="Enable Login" onClick={() => handleEnableLogin(c)}>
-                        <UserCheck className="size-3.5" />
-                      </IconButton>
-                    )}
-                    <IconButton variant="danger" title="Archive" onClick={() => setArchiveTarget(c)}>
-                      <Archive className="size-3.5" />
-                    </IconButton>
+                    {(() => {
+                      const busy = loadingKey?.startsWith(`${c.id}:`) ?? false
+                      function Sp() { return <div className="size-3 rounded-full border border-current border-t-transparent animate-spin" /> }
+                      return (<>
+                        <IconButton variant="primary" title="Edit Client" disabled={busy} onClick={() => openEdit(c)}>
+                          <Pencil className="size-3.5" />
+                        </IconButton>
+                        {c.loginStatus === "No Login" && (
+                          <IconButton variant="primary" title="Send Invite" disabled={busy} onClick={() => handleSendInvite(c)}>
+                            {loadingKey === `${c.id}:invite` ? <Sp /> : <Mail className="size-3.5" />}
+                          </IconButton>
+                        )}
+                        {c.loginStatus === "Invite Sent" && (
+                          <IconButton variant="primary" title="Resend Invite" disabled={busy} onClick={() => handleSendInvite(c)}>
+                            {loadingKey === `${c.id}:invite` ? <Sp /> : <MailCheck className="size-3.5" />}
+                          </IconButton>
+                        )}
+                        {(c.loginStatus === "Active" || c.loginStatus === "Invite Sent") && (
+                          <IconButton variant="default" title="Reset Password" disabled={busy} onClick={() => handleResetPassword(c)}>
+                            {loadingKey === `${c.id}:reset` ? <Sp /> : <KeyRound className="size-3.5" />}
+                          </IconButton>
+                        )}
+                        {(c.loginStatus === "Active" || c.loginStatus === "Invite Sent") && (
+                          <IconButton variant="danger" title="Disable Login" disabled={busy} onClick={() => handleDisableLogin(c)}>
+                            {loadingKey === `${c.id}:disable` ? <Sp /> : <UserMinus className="size-3.5" />}
+                          </IconButton>
+                        )}
+                        {c.loginStatus === "Disabled" && (
+                          <IconButton variant="primary" title="Enable Login" disabled={busy} onClick={() => handleEnableLogin(c)}>
+                            {loadingKey === `${c.id}:enable` ? <Sp /> : <UserCheck className="size-3.5" />}
+                          </IconButton>
+                        )}
+                        <IconButton variant="danger" title="Archive" disabled={busy} onClick={() => setArchiveTarget(c)}>
+                          <Archive className="size-3.5" />
+                        </IconButton>
+                      </>)
+                    })()}
                   </div>
                 </div>
               ) : (

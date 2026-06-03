@@ -266,32 +266,39 @@ export async function sendInvite(clientId: string): Promise<Client> {
   }
 
   // ── Send the invite ───────────────────────────────────────────
-  // The link in the invite email goes through Supabase, which appends
-  // ?code=<PKCE_code> and redirects to this URL.  The callback route
-  // exchanges the code for a session and forwards the client to /set-password.
-  const redirectTo = process.env.NEXT_PUBLIC_APP_URL
-    ? `${process.env.NEXT_PUBLIC_APP_URL}/auth/callback?next=/set-password`
-    : undefined
+  // Supabase appends ?code=<PKCE_code> to this URL.  The /set-password page
+  // uses detectSessionInUrl to exchange the code client-side.
+  const siteUrl    = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL
+  const redirectTo = siteUrl ? `${siteUrl}/set-password` : undefined
 
   let authUserId: string
 
   if (existingAuthUserId) {
-    // Re-invite: user record already exists — just resend the email
-    await adminClient.auth.admin.inviteUserByEmail(email, { redirectTo })
+    // Re-invite: user record already exists — just resend the email.
+    const { error: reInviteErr } = await adminClient.auth.admin.inviteUserByEmail(email, { redirectTo })
+    if (reInviteErr) {
+      console.error("[sendInvite] resend failed", { clientId, email, error: reInviteErr.message })
+      throw new Error(reInviteErr.message)
+    }
     authUserId = existingAuthUserId
   } else if (matchingUser) {
     // User exists in Auth but not linked to this client yet.
-    // (Could be a previously deleted client or an account created another way.)
     authUserId = matchingUser.id
-    // Resend invite so they get the email
-    await adminClient.auth.admin.inviteUserByEmail(email, { redirectTo })
+    const { error: reInviteErr } = await adminClient.auth.admin.inviteUserByEmail(email, { redirectTo })
+    if (reInviteErr) {
+      console.error("[sendInvite] resend (unlinked) failed", { clientId, email, error: reInviteErr.message })
+      throw new Error(reInviteErr.message)
+    }
   } else {
-    // Brand-new user — invite and get the newly-created user ID
+    // Brand-new user — invite and get the newly-created user ID.
     const { data: inviteData, error: inviteErr } = await adminClient.auth.admin.inviteUserByEmail(
       email,
       { redirectTo }
     )
-    if (inviteErr) throw new Error(inviteErr.message)
+    if (inviteErr) {
+      console.error("[sendInvite] new invite failed", { clientId, email, error: inviteErr.message })
+      throw new Error(inviteErr.message)
+    }
     authUserId = inviteData.user.id
   }
 
@@ -336,20 +343,20 @@ export async function resetPassword(clientId: string): Promise<void> {
     .single()
   if (gErr) throw new Error(gErr.message)
 
-  const email = (client as { email: string }).email
+  const email   = (client as { email: string }).email
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || process.env.NEXT_PUBLIC_APP_URL
 
-  // generateLink sends the recovery email via Supabase's configured SMTP.
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL
+  // generateLink with type "recovery" sends the password-reset email via
+  // Supabase's configured SMTP and returns the magic link.
   const { error } = await adminClient.auth.admin.generateLink({
     type:    "recovery",
     email,
-    options: {
-      redirectTo: appUrl
-        ? `${appUrl}/auth/callback?next=/set-password`
-        : undefined,
-    },
+    options: { redirectTo: siteUrl ? `${siteUrl}/set-password` : undefined },
   })
-  if (error) throw new Error(error.message)
+  if (error) {
+    console.error("[resetPassword] failed", { clientId, email, error: error.message })
+    throw new Error(error.message)
+  }
 }
 
 // ── disableLogin ──────────────────────────────────────────────
