@@ -261,36 +261,39 @@ export async function createRequest(input: CreateInput): Promise<ServiceRequest>
   const validServices = input.services.filter((s) => s.serviceName.trim())
   if (!validServices.length) throw new Error("Select at least one service.")
 
-  // Generate request number
-  const { data: recent } = await supabase
-    .from("service_requests")
-    .select("request_number")
-    .order("created_at", { ascending: false })
-    .limit(20)
-
-  let maxNum = 2005
-  for (const row of recent ?? []) {
-    const n = parseInt(row.request_number.replace("REQ-", "")) || 0
-    if (n > maxNum) maxNum = n
-  }
-
   const primaryService = validServices[0].serviceName
 
-  // Insert request
-  const { data: req, error: rErr } = await supabase
-    .from("service_requests")
-    .insert({
-      client_id:          clientId,
-      request_number:     `REQ-${maxNum + 1}`,
-      service_type:       primaryService,
-      status:             "new",
-      notes:              input.notes.trim() || null,
-      inventory_deducted: true,
-      service_details:    input.serviceDetails,
-    })
-    .select("id")
-    .single()
-  if (rErr) throw new Error(rErr.message)
+  // Insert request using an atomic PostgreSQL sequence for the number.
+  // Retry up to 5 times in the rare event a sequence value collides with
+  // a manually-inserted row; each retry consumes the next sequence value.
+  const MAX_RETRIES = 5
+  let req: { id: string } | null = null
+
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const { data: numData, error: numErr } = await supabase
+      .rpc("next_service_request_number")
+    if (numErr) throw new Error(numErr.message)
+
+    const { data, error: rErr } = await supabase
+      .from("service_requests")
+      .insert({
+        client_id:          clientId,
+        request_number:     numData as string,
+        service_type:       primaryService,
+        status:             "new",
+        notes:              input.notes.trim() || null,
+        inventory_deducted: true,
+        service_details:    input.serviceDetails,
+      })
+      .select("id")
+      .single()
+
+    if (!rErr) { req = data; break }
+    // 23505 = unique_violation — sequence value already taken, try the next one
+    if (rErr.code !== "23505") throw new Error(rErr.message)
+  }
+
+  if (!req) throw new Error("Failed to generate unique request number")
 
   const admin = createServerAdminClient()
 

@@ -848,6 +848,10 @@ export type Database = {
         Args: Record<string, never>
         Returns: string
       }
+      next_service_request_number: {
+        Args: Record<string, never>
+        Returns: string
+      }
     }
     Enums: {
       client_status:   "pending" | "active" | "inactive"
