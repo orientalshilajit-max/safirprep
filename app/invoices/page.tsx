@@ -1,19 +1,20 @@
 "use client"
 
-import { useState, useMemo, useRef } from "react"
+import { useState, useMemo, useRef, useEffect } from "react"
 import {
   Search, Download, Eye, FileText, CheckCircle,
   AlertTriangle, Clock, DollarSign, ChevronLeft,
   ChevronRight, ChevronDown, Merge, AlertCircle,
   SlidersHorizontal, CheckSquare, XSquare, Bell,
-  Trash2, X,
+  Trash2, X, Plus,
 } from "lucide-react"
 import {
-  useRole, useInvoices, useAuthUser, useIsMockMode, useCompanyBranding,
+  useRole, useInvoices, useAuthUser, useIsMockMode, useCompanyBranding, useProducts,
 } from "@/components/layout/app-shell"
 import {
   updateInvoice, listInvoices, updateInvoiceStatus,
   combineInvoices, bulkUpdateInvoiceStatus, deleteInvoices,
+  createInvoice,
 } from "@/app/invoices/actions"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
@@ -21,12 +22,15 @@ import { IconButton } from "@/components/ui/icon-button"
 import { EmptyState } from "@/components/ui/empty-state"
 import { StatCard } from "@/components/ui/stat-card"
 import { InvoiceModal } from "@/components/invoices/invoice-modal"
+import { NewInvoiceModal } from "@/components/invoices/new-invoice-modal"
+import type { NewInvoiceFormData } from "@/components/invoices/new-invoice-modal"
 import {
   InvoiceFilterPanel,
   DEFAULT_INVOICE_FILTERS,
   countActiveInvoiceFilters,
 } from "@/components/invoices/invoice-filter-panel"
 import type { InvoiceFilters } from "@/components/invoices/invoice-filter-panel"
+import { listProductClients } from "@/app/products/actions"
 import type { Invoice, InvoiceStatus, DataTableColumn } from "@/lib/types"
 
 const PAGE_SIZE = 8
@@ -51,6 +55,7 @@ export default function InvoicesPage() {
   const authUser   = useAuthUser()
   const isMockMode = useIsMockMode()
   const { invoices, setInvoices } = useInvoices()
+  const { products }              = useProducts()
   const branding   = useCompanyBranding()
 
   const [search,         setSearch]         = useState("")
@@ -65,11 +70,71 @@ export default function InvoicesPage() {
   const [downloadingId,  setDownloadingId]  = useState<string | null>(null)
   const [activeFilters,  setActiveFilters]  = useState<InvoiceFilters>(DEFAULT_INVOICE_FILTERS)
   const [filterOpen,     setFilterOpen]     = useState(false)
+  const [newInvOpen,     setNewInvOpen]     = useState(false)
   const filterBtnRef = useRef<HTMLButtonElement>(null)
+
+  // Full active-client list for the New Invoice modal (admin only)
+  const [pageClients, setPageClients] = useState<{ id: string; name: string }[]>([])
+  useEffect(() => {
+    if (!isMockMode && role === "admin") {
+      listProductClients().then(setPageClients).catch(() => {})
+    }
+  }, [isMockMode, role])
 
   function flash(text: string, isError = false) {
     setActionMsg({ text, isError })
     if (!isError) setTimeout(() => setActionMsg(null), 3500)
+  }
+
+  /* ── Create manual invoice ── */
+  async function handleCreateInvoice(data: NewInvoiceFormData) {
+    if (isMockMode) {
+      const clientName = pageClients.find((c) => c.id === data.clientId)?.name
+        ?? invoices.find((inv) => inv.clientId === data.clientId)?.clientName
+        ?? ""
+      const ts = new Date().getTime()
+      const mockInv: Invoice = {
+        id: `inv-mock-${ts}`,
+        invoiceNumber: `INV-${String(ts).slice(-4)}`,
+        clientId: data.clientId,
+        clientName,
+        clientEmail: "",
+        clientAddress: "",
+        date: new Date().toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+        dueDate: new Date(data.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }),
+        status: "Unpaid",
+        lineItems: data.lineItems.map((li, i) => ({
+          id: `li-mock-${i}`,
+          description: li.productName || li.serviceName,
+          quantity: li.quantity,
+          unitPrice: li.unitPrice,
+          productName: li.productName,
+          serviceName: li.serviceName,
+        })),
+        notes: data.notes,
+        createdAt: new Date().toISOString(),
+      }
+      setInvoices((prev) => [mockInv, ...prev])
+      setNewInvOpen(false)
+      flash("Invoice created successfully.")
+      return
+    }
+    await createInvoice({
+      clientId: data.clientId,
+      dueDate: data.dueDate,
+      notes: data.notes || undefined,
+      lineItems: data.lineItems.map((li) => ({
+        description: li.productName || li.serviceName,
+        quantity: li.quantity,
+        unitPrice: li.unitPrice,
+        productName: li.productName || undefined,
+        serviceName: li.serviceName || undefined,
+      })),
+    })
+    const fresh = await listInvoices()
+    setInvoices(fresh)
+    setNewInvOpen(false)
+    flash("Invoice created successfully.")
   }
 
   /* ── Visible by role ── */
@@ -558,6 +623,15 @@ export default function InvoicesPage() {
             {role === "admin" ? "Manage and track all client billing" : "View and download your invoices"}
           </p>
         </div>
+        {role === "admin" && (
+          <button
+            onClick={() => setNewInvOpen(true)}
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm shrink-0"
+          >
+            <Plus className="size-4" />
+            New Invoice
+          </button>
+        )}
       </div>
 
       {/* Flash message */}
@@ -779,6 +853,15 @@ export default function InvoicesPage() {
           </div>
         </div>
       </div>
+
+      {/* New Invoice modal */}
+      <NewInvoiceModal
+        isOpen={newInvOpen}
+        onClose={() => setNewInvOpen(false)}
+        onSubmit={handleCreateInvoice}
+        clients={isMockMode ? availableClients : pageClients}
+        products={products}
+      />
 
       {/* Invoice detail / edit modal */}
       <InvoiceModal
