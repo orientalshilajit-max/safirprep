@@ -90,7 +90,7 @@ export default function ServiceRequestsPage() {
   const counts = {
     Open:             active.filter((r) => r.status === "New").length,
     "In Progress":    active.filter((r) => r.status === "In Progress").length,
-    Completed:        active.filter((r) => r.status === "Completed").length,
+    Completed:        active.filter((r) => r.status === "Completed" || r.status === "Invoiced").length,
     "Need Attention": active.filter((r) => r.status === "Need Attention").length,
   }
 
