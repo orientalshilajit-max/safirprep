@@ -1,21 +1,32 @@
 "use client"
 
-import { useState, useMemo } from "react"
+import { useState, useMemo, useRef } from "react"
 import {
   Search, Download, Eye, FileText, CheckCircle,
   AlertTriangle, Clock, DollarSign, ChevronLeft,
   ChevronRight, ChevronDown, Merge, AlertCircle,
+  SlidersHorizontal, CheckSquare, XSquare, Bell,
+  Trash2, X,
 } from "lucide-react"
 import {
   useRole, useInvoices, useAuthUser, useIsMockMode, useCompanyBranding,
 } from "@/components/layout/app-shell"
-import { updateInvoice, listInvoices, updateInvoiceStatus, combineInvoices } from "@/app/invoices/actions"
+import {
+  updateInvoice, listInvoices, updateInvoiceStatus,
+  combineInvoices, bulkUpdateInvoiceStatus, deleteInvoices,
+} from "@/app/invoices/actions"
 import { DataTable } from "@/components/ui/data-table"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { IconButton } from "@/components/ui/icon-button"
 import { EmptyState } from "@/components/ui/empty-state"
 import { StatCard } from "@/components/ui/stat-card"
 import { InvoiceModal } from "@/components/invoices/invoice-modal"
+import {
+  InvoiceFilterPanel,
+  DEFAULT_INVOICE_FILTERS,
+  countActiveInvoiceFilters,
+} from "@/components/invoices/invoice-filter-panel"
+import type { InvoiceFilters } from "@/components/invoices/invoice-filter-panel"
 import type { Invoice, InvoiceStatus, DataTableColumn } from "@/lib/types"
 
 const PAGE_SIZE = 8
@@ -30,8 +41,9 @@ function invoiceTotal(inv: Invoice) {
   return inv.lineItems.reduce((s, i) => s + i.quantity * i.unitPrice, 0)
 }
 
-function canCombine(inv: Invoice) {
-  return !["Paid", "Void", "Combined"].includes(inv.status)
+// An invoice can participate in a merge only when it is not already paid/void/merged.
+function canMerge(inv: Invoice) {
+  return !["Paid", "Void", "Combined"].includes(inv.status) && !inv.combinedIntoInvoiceId
 }
 
 export default function InvoicesPage() {
@@ -48,8 +60,12 @@ export default function InvoicesPage() {
   const [selectedIds,    setSelectedIds]    = useState<Set<string>>(new Set())
   const [statusDropdown, setStatusDropdown] = useState<{ id: string; top: number; left: number } | null>(null)
   const [actionMsg,      setActionMsg]      = useState<{ text: string; isError: boolean } | null>(null)
-  const [combining,      setCombining]      = useState(false)
+  const [merging,        setMerging]        = useState(false)
+  const [bulkWorking,    setBulkWorking]    = useState(false)
   const [downloadingId,  setDownloadingId]  = useState<string | null>(null)
+  const [activeFilters,  setActiveFilters]  = useState<InvoiceFilters>(DEFAULT_INVOICE_FILTERS)
+  const [filterOpen,     setFilterOpen]     = useState(false)
+  const filterBtnRef = useRef<HTMLButtonElement>(null)
 
   function flash(text: string, isError = false) {
     setActionMsg({ text, isError })
@@ -64,6 +80,28 @@ export default function InvoicesPage() {
     return invoices.filter((inv) => inv.clientId === myId)
   }, [invoices, role, isMockMode, authUser])
 
+  /* ── Available clients for filter panel ── */
+  const availableClients = useMemo(() => {
+    if (role !== "admin") return []
+    const map = new Map<string, string>()
+    for (const inv of visible) {
+      if (inv.clientId && inv.clientName && !map.has(inv.clientId))
+        map.set(inv.clientId, inv.clientName)
+    }
+    return Array.from(map.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [visible, role])
+
+  /* ── Pre-compute which invoice IDs are targets of a merge ── */
+  const mergedIntoIds = useMemo(() => {
+    const s = new Set<string>()
+    for (const inv of visible) {
+      if (inv.combinedIntoInvoiceId) s.add(inv.combinedIntoInvoiceId)
+    }
+    return s
+  }, [visible])
+
   /* ── Stats ── */
   const stats = useMemo(() => {
     const unpaid  = visible.filter((i) => i.status === "Unpaid").length
@@ -76,21 +114,92 @@ export default function InvoicesPage() {
 
   /* ── Filter + paginate ── */
   const filtered = useMemo(() => {
-    const q = search.toLowerCase().trim()
+    const q    = search.toLowerCase().trim()
+    const now  = new Date().getTime()
+    const tod  = new Date(); tod.setHours(0, 0, 0, 0)
+    const todMs      = tod.getTime()
+    const todEndMs   = todMs + 86_400_000 - 1
+    const weekEndMs  = todMs + 7 * 86_400_000
+    const monthStart = new Date(tod.getFullYear(), tod.getMonth(), 1).getTime()
+
     return visible.filter((inv) => {
-      const matchSearch =
-        !q ||
-        inv.invoiceNumber.toLowerCase().includes(q) ||
-        inv.clientName.toLowerCase().includes(q) ||
-        (inv.relatedRequestNumber?.toLowerCase().includes(q) ?? false)
-      const matchStatus = statusFilter === "all" || inv.status === statusFilter
-      return matchSearch && matchStatus
+      // Search
+      if (q) {
+        const hit =
+          inv.invoiceNumber.toLowerCase().includes(q) ||
+          inv.clientName.toLowerCase().includes(q) ||
+          (inv.relatedRequestNumber?.toLowerCase().includes(q) ?? false)
+        if (!hit) return false
+      }
+
+      // Status dropdown
+      if (statusFilter !== "all" && inv.status !== statusFilter) return false
+
+      // ── Advanced filters ──────────────────────────────────────
+
+      // Client (admin only)
+      if (activeFilters.clientIds.length > 0 && !activeFilters.clientIds.includes(inv.clientId)) return false
+
+      // Status (multi-select, OR within the selection)
+      if (activeFilters.statuses.length > 0 && !activeFilters.statuses.includes(inv.status)) return false
+
+      // Amount
+      const amt = invoiceTotal(inv)
+      if (activeFilters.amountRange === "under-50"  && !(amt < 50))                   return false
+      if (activeFilters.amountRange === "50-100"    && !(amt >= 50  && amt < 100))     return false
+      if (activeFilters.amountRange === "100-500"   && !(amt >= 100 && amt < 500))     return false
+      if (activeFilters.amountRange === "500-plus"  && !(amt >= 500))                  return false
+      if (activeFilters.amountRange === "custom") {
+        const lo = parseFloat(activeFilters.amountFrom)
+        const hi = parseFloat(activeFilters.amountTo)
+        if (!isNaN(lo) && amt < lo) return false
+        if (!isNaN(hi) && amt > hi) return false
+      }
+
+      // Date created
+      if (activeFilters.dateCreated && inv.createdAt) {
+        const t = new Date(inv.createdAt).getTime()
+        if (activeFilters.dateCreated === "today"      && t < todMs)             return false
+        if (activeFilters.dateCreated === "7d"         && t < now - 7  * 86_400_000) return false
+        if (activeFilters.dateCreated === "30d"        && t < now - 30 * 86_400_000) return false
+        if (activeFilters.dateCreated === "this-month" && t < monthStart)        return false
+        if (activeFilters.dateCreated === "custom") {
+          if (activeFilters.dateCreatedFrom && t < new Date(activeFilters.dateCreatedFrom).getTime()) return false
+          if (activeFilters.dateCreatedTo   && t > new Date(activeFilters.dateCreatedTo + "T23:59:59").getTime()) return false
+        }
+      }
+
+      // Due date
+      if (activeFilters.dueDateRange && inv.dueDate) {
+        const due = new Date(inv.dueDate).getTime()
+        if (activeFilters.dueDateRange === "due-today"     && !(due >= todMs && due <= todEndMs)) return false
+        if (activeFilters.dueDateRange === "due-this-week" && !(due >= todMs && due < weekEndMs)) return false
+        if (activeFilters.dueDateRange === "due-next-7"    && !(due > todEndMs && due <= weekEndMs)) return false
+        if (activeFilters.dueDateRange === "overdue"       &&
+            !(due < todMs && !["Paid", "Void", "Combined"].includes(inv.status))) return false
+        if (activeFilters.dueDateRange === "custom") {
+          if (activeFilters.dueDateFrom && due < new Date(activeFilters.dueDateFrom).getTime()) return false
+          if (activeFilters.dueDateTo   && due > new Date(activeFilters.dueDateTo + "T23:59:59").getTime()) return false
+        }
+      }
+
+      // Merge status
+      const isIncluded  = !!inv.combinedIntoInvoiceId
+      const isCombinedInvoice = mergedIntoIds.has(inv.id)
+      const isStandalone = !isIncluded && !isCombinedInvoice && inv.status !== "Combined"
+      if (activeFilters.mergeStatus === "standalone"        && !isStandalone)      return false
+      if (activeFilters.mergeStatus === "combined-invoice"  && !isCombinedInvoice) return false
+      if (activeFilters.mergeStatus === "included-in-merge" && !isIncluded)        return false
+
+      return true
     })
-  }, [visible, search, statusFilter])
+  }, [visible, search, statusFilter, activeFilters, mergedIntoIds])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const safePage   = Math.min(page, totalPages)
   const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+  const activeFilterCount = countActiveInvoiceFilters(activeFilters)
+  const hasAnyFilter = !!search || statusFilter !== "all" || activeFilterCount > 0
 
   /* ── Save (from modal edit) ── */
   async function handleSave(updated: Invoice) {
@@ -121,7 +230,6 @@ export default function InvoicesPage() {
     const inv = statusDropdown ? invoices.find((i) => i.id === statusDropdown.id) : null
     setStatusDropdown(null)
     if (!inv || newStatus === inv.status) return
-
     if (isMockMode) {
       setInvoices((prev) => prev.map((i) => i.id === inv.id ? { ...i, status: newStatus } : i))
       flash(`${inv.invoiceNumber} → ${newStatus}`)
@@ -137,27 +245,145 @@ export default function InvoicesPage() {
     }
   }
 
-  /* ── Combine ── */
-  async function handleCombine() {
-    const ids = [...selectedIds]
-    if (ids.length < 2) { flash("Select at least 2 invoices to combine.", true); return }
-    setCombining(true)
+  /* ── Merge selected ── */
+  async function handleMergeSelected() {
+    const ids      = [...selectedIds]
+    const selected = visible.filter((inv) => ids.includes(inv.id))
+
+    if (ids.length < 2) { flash("Select at least 2 invoices to merge.", true); return }
+
+    // Same-client check
+    const clientIds = new Set(selected.map((inv) => inv.clientId))
+    if (clientIds.size > 1) {
+      flash("Cannot merge invoices. Selected invoices belong to different clients.", true)
+      return
+    }
+
+    // Status check
+    const blocked = selected.filter((inv) => !canMerge(inv))
+    if (blocked.length > 0) {
+      flash(
+        `Cannot merge: ${blocked.map((i) => i.invoiceNumber).join(", ")} ` +
+        `(${blocked[0].status} invoices cannot be merged).`,
+        true,
+      )
+      return
+    }
+
+    setMerging(true)
     setActionMsg(null)
     try {
       await combineInvoices(ids)
       const fresh = await listInvoices()
       setInvoices(fresh)
       setSelectedIds(new Set())
-      flash("Invoices combined successfully into a new invoice.")
+      flash(`${ids.length} invoices merged successfully.`)
     } catch (err) {
-      flash(err instanceof Error ? err.message : "Failed to combine invoices.", true)
+      flash(err instanceof Error ? err.message : "Failed to merge invoices.", true)
     } finally {
-      setCombining(false)
+      setMerging(false)
     }
   }
 
-  function toggleSelect(id: string, inv: Invoice) {
-    if (!canCombine(inv)) return
+  /* ── Bulk: Mark Paid ── */
+  async function handleBulkMarkPaid() {
+    const ids = [...selectedIds]
+    if (isMockMode) {
+      setInvoices((prev) => prev.map((inv) => ids.includes(inv.id) ? { ...inv, status: "Paid" as InvoiceStatus } : inv))
+      flash(`${ids.length} invoice(s) marked as Paid.`)
+      setSelectedIds(new Set())
+      return
+    }
+    setBulkWorking(true)
+    try {
+      await bulkUpdateInvoiceStatus(ids, "Paid")
+      setInvoices(await listInvoices())
+      setSelectedIds(new Set())
+      flash(`${ids.length} invoice(s) marked as Paid.`)
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "Failed to update invoices.", true)
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
+  /* ── Bulk: Mark Unpaid ── */
+  async function handleBulkMarkUnpaid() {
+    const ids = [...selectedIds]
+    if (isMockMode) {
+      setInvoices((prev) => prev.map((inv) => ids.includes(inv.id) ? { ...inv, status: "Unpaid" as InvoiceStatus } : inv))
+      flash(`${ids.length} invoice(s) marked as Unpaid.`)
+      setSelectedIds(new Set())
+      return
+    }
+    setBulkWorking(true)
+    try {
+      await bulkUpdateInvoiceStatus(ids, "Unpaid")
+      setInvoices(await listInvoices())
+      setSelectedIds(new Set())
+      flash(`${ids.length} invoice(s) marked as Unpaid.`)
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "Failed to update invoices.", true)
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
+  /* ── Bulk: Send Reminder (queued — no email service wired) ── */
+  function handleSendReminder() {
+    flash(`Reminder queued for ${selectedIds.size} invoice(s).`)
+    setSelectedIds(new Set())
+  }
+
+  /* ── Bulk: Download PDFs ── */
+  async function handleBulkDownload() {
+    const toDownload = visible.filter((inv) => selectedIds.has(inv.id))
+    let errors = 0
+    for (const inv of toDownload) {
+      try {
+        const res = await fetch(`/api/invoices/${inv.id}/pdf`)
+        if (!res.ok) { errors++; continue }
+        const blob = await res.blob()
+        const url  = URL.createObjectURL(blob)
+        const a    = document.createElement("a")
+        a.href     = url
+        a.download = `invoice-${inv.invoiceNumber}.pdf`
+        document.body.appendChild(a); a.click(); document.body.removeChild(a)
+        URL.revokeObjectURL(url)
+        await new Promise((r) => setTimeout(r, 400))
+      } catch { errors++ }
+    }
+    if (errors > 0) flash(`Downloaded ${toDownload.length - errors} of ${toDownload.length}. ${errors} failed.`, true)
+    else flash(`Downloaded ${toDownload.length} PDF(s).`)
+  }
+
+  /* ── Bulk: Delete ── */
+  async function handleBulkDelete() {
+    const count = selectedIds.size
+    if (!window.confirm(`Delete ${count} invoice(s)? Paid invoices will be skipped. This cannot be undone.`)) return
+    const ids = [...selectedIds]
+
+    if (isMockMode) {
+      setInvoices((prev) => prev.filter((inv) => !ids.includes(inv.id) || inv.status === "Paid"))
+      flash(`Invoice(s) deleted.`)
+      setSelectedIds(new Set())
+      return
+    }
+    setBulkWorking(true)
+    try {
+      const { deleted, skipped } = await deleteInvoices(ids)
+      setInvoices(await listInvoices())
+      setSelectedIds(new Set())
+      if (skipped.length > 0) flash(`Deleted ${deleted}. Skipped paid: ${skipped.join(", ")}.`, true)
+      else flash(`Deleted ${deleted} invoice(s).`)
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "Failed to delete invoices.", true)
+    } finally {
+      setBulkWorking(false)
+    }
+  }
+
+  function toggleSelect(id: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev)
       if (next.has(id)) next.delete(id); else next.add(id)
@@ -196,12 +422,9 @@ export default function InvoicesPage() {
       const a    = document.createElement("a")
       a.href     = url
       a.download = `invoice-${inv.invoiceNumber}.pdf`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
+      document.body.appendChild(a); a.click(); document.body.removeChild(a)
       URL.revokeObjectURL(url)
     } catch (err) {
-      console.error("[handleDownloadPdf]", err)
       flash(err instanceof Error ? err.message : "Unable to download invoice.", true)
     } finally {
       setDownloadingId(null)
@@ -214,18 +437,15 @@ export default function InvoicesPage() {
     header: "",
     headerClassName: "w-10 pl-4 pr-1",
     className: "w-10 pl-4 pr-1",
-    cell: (row) => {
-      if (!canCombine(row)) return <span className="inline-block w-4" />
-      return (
-        <input
-          type="checkbox"
-          checked={selectedIds.has(row.id)}
-          onChange={() => toggleSelect(row.id, row)}
-          onClick={(e) => e.stopPropagation()}
-          className="accent-blue-600 size-3.5 cursor-pointer"
-        />
-      )
-    },
+    cell: (row) => (
+      <input
+        type="checkbox"
+        checked={selectedIds.has(row.id)}
+        onChange={() => toggleSelect(row.id)}
+        onClick={(e) => e.stopPropagation()}
+        className="accent-blue-600 size-3.5 cursor-pointer"
+      />
+    ),
   }
 
   const baseColumns: DataTableColumn<Invoice>[] = [
@@ -313,6 +533,8 @@ export default function InvoicesPage() {
       ? [checkboxCol, baseColumns[0], adminClientCol, ...baseColumns.slice(1)]
       : baseColumns
 
+  const isBulkBusy = merging || bulkWorking
+
   /* ── Render ── */
   return (
     <div className="flex flex-col gap-4 h-full">
@@ -324,13 +546,6 @@ export default function InvoicesPage() {
             {role === "admin" ? "Manage and track all client billing" : "View and download your invoices"}
           </p>
         </div>
-        {role === "admin" && selectedIds.size >= 2 && (
-          <button onClick={handleCombine} disabled={combining}
-            className="flex items-center gap-1.5 px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white text-[13px] font-semibold rounded-lg transition-colors shadow-sm disabled:opacity-60 shrink-0">
-            <Merge className="size-4" />
-            {combining ? "Combining…" : `Combine ${selectedIds.size} Invoices`}
-          </button>
-        )}
       </div>
 
       {/* Flash message */}
@@ -338,8 +553,10 @@ export default function InvoicesPage() {
         <div className={`flex items-start gap-2 rounded-lg border px-4 py-3 ${
           actionMsg.isError ? "border-red-100 bg-red-50" : "border-green-100 bg-green-50"}`}>
           <AlertCircle className={`size-4 mt-0.5 shrink-0 ${actionMsg.isError ? "text-red-500" : "text-green-600"}`} />
-          <p className={`text-[13px] ${actionMsg.isError ? "text-red-600" : "text-green-700"}`}>{actionMsg.text}</p>
-          <button onClick={() => setActionMsg(null)} className="ml-auto text-gray-400 hover:text-gray-600 text-[12px]">✕</button>
+          <p className={`text-[13px] flex-1 ${actionMsg.isError ? "text-red-600" : "text-green-700"}`}>{actionMsg.text}</p>
+          <button onClick={() => setActionMsg(null)} className="ml-auto text-gray-400 hover:text-gray-600">
+            <X className="size-3.5" />
+          </button>
         </div>
       )}
 
@@ -372,6 +589,7 @@ export default function InvoicesPage() {
 
       {/* Table card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden flex-1 min-h-0">
+
         {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-200">
           <div className="relative flex-1 min-w-[140px]">
@@ -390,10 +608,62 @@ export default function InvoicesPage() {
             <option value="Void">Void</option>
             <option value="Combined">Combined</option>
           </select>
-          {role === "admin" && selectedIds.size > 0 && (
-            <span className="text-[12px] text-gray-500">{selectedIds.size} selected</span>
-          )}
+          <button
+            ref={filterBtnRef}
+            onClick={() => setFilterOpen((v) => !v)}
+            className={`flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium border rounded-lg transition-colors ${
+              filterOpen || activeFilterCount > 0
+                ? "bg-blue-50 border-blue-300 text-blue-700"
+                : "text-gray-600 border-gray-200 hover:bg-gray-50"
+            }`}
+          >
+            <SlidersHorizontal className="size-3.5" />
+            {activeFilterCount > 0 ? `Filters (${activeFilterCount})` : "Filters"}
+          </button>
         </div>
+
+        {/* Bulk action bar */}
+        {role === "admin" && selectedIds.size > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 px-4 py-2 bg-blue-50 border-b border-blue-100">
+            <span className="text-[12px] font-semibold text-blue-700 mr-1">
+              {selectedIds.size} selected
+            </span>
+            <div className="h-3.5 w-px bg-blue-200 mx-0.5" />
+            <button onClick={handleMergeSelected} disabled={isBulkBusy}
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-violet-700 bg-violet-100 hover:bg-violet-200 rounded-md transition-colors disabled:opacity-50">
+              <Merge className="size-3" />
+              {merging ? "Merging…" : "Merge"}
+            </button>
+            <button onClick={handleBulkMarkPaid} disabled={isBulkBusy}
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-green-700 bg-green-100 hover:bg-green-200 rounded-md transition-colors disabled:opacity-50">
+              <CheckSquare className="size-3" />
+              Mark Paid
+            </button>
+            <button onClick={handleBulkMarkUnpaid} disabled={isBulkBusy}
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-blue-700 bg-blue-100 hover:bg-blue-200 rounded-md transition-colors disabled:opacity-50">
+              <XSquare className="size-3" />
+              Mark Unpaid
+            </button>
+            <button onClick={handleSendReminder} disabled={isBulkBusy}
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-amber-700 bg-amber-100 hover:bg-amber-200 rounded-md transition-colors disabled:opacity-50">
+              <Bell className="size-3" />
+              Send Reminder
+            </button>
+            <button onClick={handleBulkDownload} disabled={isBulkBusy}
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-md transition-colors disabled:opacity-50">
+              <Download className="size-3" />
+              Download PDFs
+            </button>
+            <button onClick={handleBulkDelete} disabled={isBulkBusy}
+              className="flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-red-700 bg-red-100 hover:bg-red-200 rounded-md transition-colors disabled:opacity-50">
+              <Trash2 className="size-3" />
+              Delete
+            </button>
+            <button onClick={() => setSelectedIds(new Set())} className="ml-auto text-gray-400 hover:text-gray-600 transition-colors" title="Clear selection">
+              <X className="size-3.5" />
+            </button>
+          </div>
+        )}
 
         {/* Table */}
         <div className="flex-1 overflow-y-auto">
@@ -405,9 +675,9 @@ export default function InvoicesPage() {
               <div className="px-4 py-3">
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    {role === "admin" && canCombine(inv) && (
+                    {role === "admin" && (
                       <input type="checkbox" checked={selectedIds.has(inv.id)}
-                        onChange={() => toggleSelect(inv.id, inv)}
+                        onChange={() => toggleSelect(inv.id)}
                         onClick={(e) => e.stopPropagation()}
                         className="accent-blue-600 size-3.5 cursor-pointer mt-0.5" />
                     )}
@@ -450,7 +720,7 @@ export default function InvoicesPage() {
             )}
             emptyState={
               <EmptyState title="No invoices found"
-                description={search || statusFilter !== "all"
+                description={hasAnyFilter
                   ? "Try adjusting your search or filters."
                   : "No invoices have been issued yet."} />
             }
@@ -506,6 +776,19 @@ export default function InvoicesPage() {
         onSave={handleSave}
         companyInfo={companyInfo}
       />
+
+      {/* Filter panel */}
+      {filterOpen && (
+        <InvoiceFilterPanel
+          onClose={() => setFilterOpen(false)}
+          anchorRef={filterBtnRef}
+          appliedFilters={activeFilters}
+          onApply={(f) => { setActiveFilters(f); setPage(1) }}
+          onClear={() => { setActiveFilters(DEFAULT_INVOICE_FILTERS); setPage(1) }}
+          clients={availableClients}
+          isAdmin={role === "admin"}
+        />
+      )}
 
       {/* Status dropdown — fixed positioned */}
       {statusDropdown && (

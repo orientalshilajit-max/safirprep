@@ -282,6 +282,60 @@ export async function updateInvoiceStatus(id: string, status: InvoiceStatus): Pr
   return mapRow(data as unknown as DbInvoiceRow)
 }
 
+// ── bulkUpdateInvoiceStatus ───────────────────────────────────
+
+export async function bulkUpdateInvoiceStatus(
+  ids: string[],
+  status: InvoiceStatus,
+): Promise<void> {
+  if (ids.length === 0) return
+  const { supabase } = await requireAdmin()
+  const { error } = await supabase
+    .from("invoices")
+    .update({ status: TO_DB[status] as "unpaid" | "paid" | "overdue" | "void" })
+    .in("id", ids)
+  if (error) throw new Error(error.message)
+}
+
+// ── deleteInvoices ────────────────────────────────────────────
+
+export async function deleteInvoices(
+  ids: string[],
+): Promise<{ deleted: number; skipped: string[] }> {
+  if (ids.length === 0) return { deleted: 0, skipped: [] }
+  const { supabase } = await requireAdmin()
+
+  // Load invoices to check which can be deleted (protect Paid records)
+  const { data: rows, error: fetchErr } = await supabase
+    .from("invoices")
+    .select("id, invoice_number, status")
+    .in("id", ids)
+  if (fetchErr) throw new Error(fetchErr.message)
+
+  const deletable = (rows ?? []).filter((r) => r.status !== "paid")
+  const skipped   = (rows ?? [])
+    .filter((r) => r.status === "paid")
+    .map((r) => r.invoice_number as string)
+
+  if (deletable.length > 0) {
+    const deletableIds = deletable.map((r) => r.id as string)
+    // Remove line items first to avoid FK issues
+    const { error: liErr } = await supabase
+      .from("invoice_items")
+      .delete()
+      .in("invoice_id", deletableIds)
+    if (liErr) throw new Error(liErr.message)
+
+    const { error: delErr } = await supabase
+      .from("invoices")
+      .delete()
+      .in("id", deletableIds)
+    if (delErr) throw new Error(delErr.message)
+  }
+
+  return { deleted: deletable.length, skipped }
+}
+
 // ── combineInvoices ───────────────────────────────────────────
 
 export async function combineInvoices(invoiceIds: string[]): Promise<Invoice> {

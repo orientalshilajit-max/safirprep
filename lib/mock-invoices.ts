@@ -18,6 +18,7 @@ export const mockInvoices: Invoice[] = [
     ],
     notes: "Payment due within 14 days. ACH or wire transfer preferred.",
     relatedRequestNumber: "REQ-2005",
+    createdAt: "2026-05-22T10:00:00Z",
   },
   {
     id: "inv-40",
@@ -36,6 +37,7 @@ export const mockInvoices: Invoice[] = [
     ],
     notes: "Payment is now overdue. Please remit immediately to avoid service hold.",
     relatedRequestNumber: "REQ-2004",
+    createdAt: "2026-05-17T09:30:00Z",
   },
   {
     id: "inv-39",
@@ -54,6 +56,7 @@ export const mockInvoices: Invoice[] = [
     ],
     notes: "Payment received via ACH on May 23, 2026. Thank you!",
     relatedRequestNumber: "REQ-2002",
+    createdAt: "2026-05-10T14:00:00Z",
   },
   {
     id: "inv-38",
@@ -71,6 +74,7 @@ export const mockInvoices: Invoice[] = [
     ],
     notes: "Wire transfer received May 18, 2026.",
     relatedRequestNumber: "REQ-2001",
+    createdAt: "2026-05-05T11:00:00Z",
   },
   {
     id: "inv-37",
@@ -88,6 +92,7 @@ export const mockInvoices: Invoice[] = [
     ],
     notes: "",
     relatedRequestNumber: "REQ-2000",
+    createdAt: "2026-04-28T08:00:00Z",
   },
   {
     id: "inv-36",
@@ -105,6 +110,7 @@ export const mockInvoices: Invoice[] = [
     ],
     notes: "Paid via check #4492.",
     relatedRequestNumber: "REQ-1999",
+    createdAt: "2026-04-20T16:00:00Z",
   },
   {
     id: "inv-35",
@@ -121,6 +127,7 @@ export const mockInvoices: Invoice[] = [
       { id: "li17", description: "Bundling – Lamp + Cable Combo", quantity: 50, unitPrice: 1.25 },
     ],
     notes: "Voided — duplicate of INV-0034. Please disregard.",
+    createdAt: "2026-04-10T13:00:00Z",
   },
   {
     id: "inv-34",
@@ -137,5 +144,6 @@ export const mockInvoices: Invoice[] = [
       { id: "li19", description: "Pallet Wrap Materials", quantity: 20, unitPrice: 4.50 },
     ],
     notes: "Extended terms approved for Q1 storage. Due May 26.",
+    createdAt: "2026-04-05T09:00:00Z",
   },
 ]
