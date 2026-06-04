@@ -102,13 +102,14 @@ export default function InvoicesPage() {
     return s
   }, [visible])
 
-  /* ── Stats ── */
+  /* ── Stats — exclude merged source invoices so only the combined parent counts ── */
   const stats = useMemo(() => {
-    const unpaid  = visible.filter((i) => i.status === "Unpaid").length
-    const paid    = visible.filter((i) => i.status === "Paid").length
-    const overdue = visible.filter((i) => i.status === "Overdue").length
-    const revenue = visible.filter((i) => i.status === "Paid").reduce((s, i) => s + invoiceTotal(i), 0)
-    const total   = visible.length
+    const base    = visible.filter((i) => !i.combinedIntoInvoiceId)
+    const unpaid  = base.filter((i) => i.status === "Unpaid").length
+    const paid    = base.filter((i) => i.status === "Paid").length
+    const overdue = base.filter((i) => i.status === "Overdue").length
+    const revenue = base.filter((i) => i.status === "Paid").reduce((s, i) => s + invoiceTotal(i), 0)
+    const total   = base.length
     return { unpaid, paid, overdue, revenue, total }
   }, [visible])
 
@@ -184,12 +185,23 @@ export default function InvoicesPage() {
       }
 
       // Merge status
-      const isIncluded  = !!inv.combinedIntoInvoiceId
+      // Default ("") hides merged source invoices — they are kept in the DB but not shown.
+      // "all" explicitly reveals them. Specific options filter to that subset only.
+      const isIncluded        = !!inv.combinedIntoInvoiceId
       const isCombinedInvoice = mergedIntoIds.has(inv.id)
-      const isStandalone = !isIncluded && !isCombinedInvoice && inv.status !== "Combined"
-      if (activeFilters.mergeStatus === "standalone"        && !isStandalone)      return false
-      if (activeFilters.mergeStatus === "combined-invoice"  && !isCombinedInvoice) return false
-      if (activeFilters.mergeStatus === "included-in-merge" && !isIncluded)        return false
+      const isStandalone      = !isIncluded && !isCombinedInvoice && inv.status !== "Combined"
+
+      if (!activeFilters.mergeStatus) {
+        // Default: hide source invoices that were merged into another
+        if (isIncluded) return false
+      } else if (activeFilters.mergeStatus === "standalone") {
+        if (!isStandalone) return false
+      } else if (activeFilters.mergeStatus === "combined-invoice") {
+        if (!isCombinedInvoice) return false
+      } else if (activeFilters.mergeStatus === "included-in-merge") {
+        if (!isIncluded) return false
+      }
+      // "all": no additional restriction — show everything
 
       return true
     })

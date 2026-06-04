@@ -240,7 +240,7 @@ function ClientDashboard() {
   const availableUnits = activeProducts.reduce((s, p) => s + p.available, 0)
   const incomingUnits  = myProducts.reduce((s, p) => s + p.incoming, 0)
   const openRequests   = myRequests.filter((r) => r.status === "New").length
-  const unpaidInvoices = myInvoices.filter((i) => ["Unpaid", "Overdue"].includes(i.status)).length
+  const unpaidInvoices = myInvoices.filter((i) => !i.combinedIntoInvoiceId && ["Unpaid", "Overdue"].includes(i.status)).length
 
   const recentShipments = [...myShipments]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
@@ -401,10 +401,10 @@ function AdminDashboard() {
   const openRequests  = requests.filter(
     (r) => !r.isArchived && ["New", "In Progress"].includes(r.status)
   ).length
-  const unpaidInvoices = invoices.filter((i) => ["Unpaid", "Overdue"].includes(i.status)).length
+  const unpaidInvoices = invoices.filter((i) => !i.combinedIntoInvoiceId && ["Unpaid", "Overdue"].includes(i.status)).length
 
   // ── Revenue ───────────────────────────────────────────
-  const paidInvoices = invoices.filter((i) => i.status === "Paid")
+  const paidInvoices = invoices.filter((i) => !i.combinedIntoInvoiceId && i.status === "Paid")
   const revenue      = paidInvoices.reduce((s, i) => s + invoiceTotal(i), 0)
 
   // Date-windowed revenue from ISO createdAt (Supabase mode).

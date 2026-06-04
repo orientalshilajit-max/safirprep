@@ -16,7 +16,7 @@ export type InvoiceFilters = {
   dueDateRange: "" | "due-today" | "due-this-week" | "due-next-7" | "overdue" | "custom"
   dueDateFrom: string
   dueDateTo: string
-  mergeStatus: "" | "standalone" | "combined-invoice" | "included-in-merge"
+  mergeStatus: "" | "all" | "standalone" | "combined-invoice" | "included-in-merge"
 }
 
 export const DEFAULT_INVOICE_FILTERS: InvoiceFilters = {
@@ -409,9 +409,10 @@ export function InvoiceFilterPanel({
           defaultExpanded={!!pending.mergeStatus}
         >
           <div className="space-y-1.5">
-            <RadioOption label="Standalone"        checked={pending.mergeStatus === "standalone"}        onChange={() => setMergeStatus("standalone")} />
-            <RadioOption label="Combined Invoice"  checked={pending.mergeStatus === "combined-invoice"}  onChange={() => setMergeStatus("combined-invoice")} />
-            <RadioOption label="Included In Merge" checked={pending.mergeStatus === "included-in-merge"} onChange={() => setMergeStatus("included-in-merge")} />
+            <RadioOption label="All (including merged)" checked={pending.mergeStatus === "all"}             onChange={() => setMergeStatus("all")} />
+            <RadioOption label="Standalone"              checked={pending.mergeStatus === "standalone"}        onChange={() => setMergeStatus("standalone")} />
+            <RadioOption label="Combined Invoice"        checked={pending.mergeStatus === "combined-invoice"}  onChange={() => setMergeStatus("combined-invoice")} />
+            <RadioOption label="Included In Merge"       checked={pending.mergeStatus === "included-in-merge"} onChange={() => setMergeStatus("included-in-merge")} />
           </div>
         </CollapsibleSection>
       </div>
