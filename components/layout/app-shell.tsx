@@ -238,68 +238,62 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     const supabase = createBrowserClient()
 
-    // Prime with the current session (avoids flash of wrong role)
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (user) {
-        const shaped = shapeUser(user)
-        setAuthUser(shaped)
-        setRole(shaped.role)
-        // Load all connected modules together; keep spinner until ready
-        // to avoid a flash of empty-state tables.
-        // If this is a client user logging in for the first time (invited → active),
-        // promote their login_status before loading data.
-        if (shaped.role === "client") {
-          activateClientLogin().catch(() => {})
-        }
-
-        try {
-          console.log("[DataSource] Loading all data from Supabase…")
-          const [productsData, shipmentsData, requestsData, filesData, invoicesData, clientsData, brandingData] =
-            await Promise.all([
-              listProducts(),
-              listShipments(),
-              listRequests(),
-              listFiles(),
-              listInvoices(),
-              listClients(),
-              fetchPublicCompanyBranding(),
-            ])
-          setProducts(productsData)
-          setShipments(shipmentsData)
-          setRequests(requestsData)
-          setFiles(filesData)
-          setInvoices(invoicesData)
-          setClients(clientsData)
-          setCompanyName(brandingData.companyName)
-          setCompanyLogoUrl(brandingData.logoUrl)
-          setCompanyInvoiceLogoUrl(brandingData.invoiceLogoUrl)
-          setCompanyAddress(brandingData.address)
-          setCompanyEmail(brandingData.email)
-          setCompanyPhone(brandingData.phone)
-          setCompanyWebsite(brandingData.website)
-          setCompanyPaymentInstructions(brandingData.paymentInstructions)
-          authedRef.current = true
-          console.log("[DataSource] Initial load complete. Source: Supabase")
-        } catch {
-          // Leave data empty; pages will show their empty states.
-        }
+    const loadAllData = async (shaped: AuthUser) => {
+      if (shaped.role === "client") {
+        activateClientLogin().catch(() => {})
       }
-      setAuthLoading(false)
-    })
+      try {
+        console.log("[DataSource] Loading all data from Supabase…")
+        const [productsData, shipmentsData, requestsData, filesData, invoicesData, clientsData, brandingData] =
+          await Promise.all([
+            listProducts(),
+            listShipments(),
+            listRequests(),
+            listFiles(),
+            listInvoices(),
+            listClients(),
+            fetchPublicCompanyBranding(),
+          ])
+        setProducts(productsData)
+        setShipments(shipmentsData)
+        setRequests(requestsData)
+        setFiles(filesData)
+        setInvoices(invoicesData)
+        setClients(clientsData)
+        setCompanyName(brandingData.companyName)
+        setCompanyLogoUrl(brandingData.logoUrl)
+        setCompanyInvoiceLogoUrl(brandingData.invoiceLogoUrl)
+        setCompanyAddress(brandingData.address)
+        setCompanyEmail(brandingData.email)
+        setCompanyPhone(brandingData.phone)
+        setCompanyWebsite(brandingData.website)
+        setCompanyPaymentInstructions(brandingData.paymentInstructions)
+        authedRef.current = true
+        console.log("[DataSource] Initial load complete. Source: Supabase")
+      } catch (err) {
+        console.error("[DataSource] Initial load failed:", err)
+      }
+    }
 
-    // Stay in sync with sign-in / sign-out / token-refresh events
+    // onAuthStateChange fires INITIAL_SESSION on mount (handles page load/refresh)
+    // and SIGNED_IN after login (handles post-login navigation without page refresh).
+    // Both paths load data when authedRef.current is false, so data is always
+    // available regardless of whether the user refreshed or navigated from login.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, session) => {
+      async (_event, session) => {
         if (session?.user) {
           const shaped = shapeUser(session.user)
           setAuthUser(shaped)
           setRole(shaped.role)
+          if (!authedRef.current) {
+            await loadAllData(shaped)
+          }
         } else {
           setAuthUser(null)
           setRole("client")
-          // Middleware will catch the missing session on the next
-          // navigation and redirect to /login.
+          authedRef.current = false
         }
+        setAuthLoading(false)
       }
     )
 

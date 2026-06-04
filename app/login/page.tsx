@@ -77,8 +77,8 @@ function LoginForm() {
       console.log("[Login] cookies after sign-in:", cookieNames)
 
       console.log("[Login] navigating to", redirect)
-      router.push(redirect)
       router.refresh()
+      router.replace(redirect)
     } catch {
       setError("Unable to reach the auth service. Check your connection and try again.")
     } finally {
