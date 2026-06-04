@@ -94,8 +94,6 @@ function ContactCard() {
 
 // ── Page ──────────────────────────────────────────────────────
 
-type Tab = "active" | "archived"
-
 export default function HelpPage() {
   const { role }     = useRole()
   const authUser     = useAuthUser()
@@ -104,7 +102,6 @@ export default function HelpPage() {
 
   const isAdmin = role === "admin"
 
-  const [tab,          setTab]          = useState<Tab>("active")
   const [tickets,      setTickets]      = useState<SupportTicket[]>([])
   // loading starts true in Supabase mode (first fetch pending), false in mock mode
   const [loading,      setLoading]      = useState(!isMockMode)
@@ -114,7 +111,8 @@ export default function HelpPage() {
   const [detailMsgs,   setDetailMsgs]   = useState<TicketMessage[]>([])
   const [detailLoading,setDetailLoading]= useState(false)
   const [flashMsg,     setFlashMsg]     = useState<{ text: string; warn?: boolean } | null>(null)
-  const [filterStatus, setFilterStatus] = useState<TicketStatus | "all">("all")
+  // Default to "Open" so users land on actionable tickets
+  const [filterStatus, setFilterStatus] = useState<TicketStatus | "all">("Open")
   const [filterClient, setFilterClient] = useState("")
 
   function flash(text: string, warn = false) {
@@ -126,7 +124,7 @@ export default function HelpPage() {
   // load() never triggers synchronous setState (satisfies react-hooks/set-state-in-effect).
   const load = useCallback(async () => {
     try {
-      const data = await listTickets(tab === "archived")
+      const data = await listTickets()
       setLoadError("")
       setTickets(data)
     } catch (err) {
@@ -134,7 +132,7 @@ export default function HelpPage() {
     } finally {
       setLoading(false)
     }
-  }, [tab])
+  }, [])
 
   // Only runs in Supabase mode; mock mode needs no fetch.
   // setState inside load() is called only after await (async boundary), so this is safe.
@@ -154,9 +152,9 @@ export default function HelpPage() {
     }
   }
 
-  function handleReplied(newMsg: TicketMessage, emailSent: boolean) {
+  function handleReplied(newMsg: TicketMessage, emailSent: boolean, emailError?: string) {
     setDetailMsgs((p) => [...p, newMsg])
-    if (!emailSent) flash("Reply saved. Email notification could not be sent.", true)
+    if (emailError === "not-configured") flash("Reply saved. Email provider is not configured.", true)
     else flash("Reply sent.")
     // Refresh list
     void load()
@@ -168,12 +166,16 @@ export default function HelpPage() {
   }
 
   function handleArchived(id: string) {
-    setTickets((p) => p.filter((t) => t.id !== id))
+    setTickets((p) => p.map((t) => t.id === id
+      ? { ...t, status: "Archived" as TicketStatus, archivedAt: new Date().toISOString() }
+      : t))
     flash("Ticket archived.")
   }
 
   function handleRestored(id: string) {
-    setTickets((p) => p.filter((t) => t.id !== id))
+    setTickets((p) => p.map((t) => t.id === id
+      ? { ...t, status: "Open" as TicketStatus, archivedAt: null }
+      : t))
     flash("Ticket reopened.")
   }
 
@@ -200,7 +202,7 @@ export default function HelpPage() {
     : undefined
 
   const STATUSES: TicketStatus[] = [
-    "Open", "Waiting for Client", "Waiting for Admin", "Resolved", "Archived",
+    "Open", "Waiting for Admin", "Waiting for Client", "Resolved", "Archived",
   ]
 
   return (
@@ -239,25 +241,12 @@ export default function HelpPage() {
 
         {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-200">
-          {/* Tabs */}
-          <div className="flex rounded-lg border border-gray-200 overflow-hidden text-[12px] font-medium shrink-0">
-            {(["active","archived"] as Tab[]).map((t) => (
-              <button key={t}
-                className={`px-3 py-1.5 transition-colors capitalize ${
-                  tab === t ? "bg-blue-600 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
-                onClick={() => { setTab(t); setFilterStatus("all"); if (!isMockMode) setLoading(true) }}
-              >
-                {t}
-              </button>
-            ))}
-          </div>
-
           {/* Status filter */}
           <select value={filterStatus}
             onChange={(e) => setFilterStatus(e.target.value as TicketStatus | "all")}
             className="px-3 py-1.5 text-[12px] border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-600">
-            <option value="all">All Statuses</option>
             {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+            <option value="all">All Statuses</option>
           </select>
 
           {/* Client filter (admin) */}
@@ -304,9 +293,9 @@ export default function HelpPage() {
                 <MessageSquare className="size-6 text-gray-300" />
               </div>
               <p className="text-[14px] font-semibold text-gray-500">
-                {tab === "archived" ? "No archived tickets" : "No open tickets"}
+                {filterStatus === "all" ? "No tickets" : `No ${filterStatus.toLowerCase()} tickets`}
               </p>
-              {tab === "active" && (
+              {filterStatus === "Open" && (
                 <p className="text-[13px] text-gray-400">
                   Need help? Click <strong>New Ticket</strong> to get in touch.
                 </p>
@@ -354,14 +343,14 @@ export default function HelpPage() {
                       {timeAgo(t.updatedAt)}
                     </td>
                     <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                      {tab === "active" && (t.status === "Resolved") && (
+                      {t.status === "Resolved" && (
                         <button onClick={() => quickArchive(t.id)}
                           title="Archive"
                           className="p-1 rounded text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-all">
                           <Archive className="size-3.5" />
                         </button>
                       )}
-                      {tab === "archived" && isAdmin && (
+                      {t.status === "Archived" && isAdmin && (
                         <button onClick={() => quickRestore(t.id)}
                           title="Reopen"
                           className="p-1 rounded text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition-all">
@@ -394,9 +383,9 @@ export default function HelpPage() {
       <NewTicketModal
         isOpen={newOpen}
         onClose={() => setNewOpen(false)}
-        onCreated={(ticketId, emailSent) => {
+        onCreated={(_ticketId, emailSent, emailError) => {
           setNewOpen(false)
-          if (!emailSent) flash("Ticket created. Email notification could not be sent.", true)
+          if (emailError === "not-configured") flash("Ticket created. Email provider is not configured.", true)
           else flash("Ticket created successfully.")
           void load()
         }}

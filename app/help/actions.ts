@@ -14,17 +14,22 @@ async function sendSupportEmail(opts: {
   html: string
 }): Promise<{ sent: boolean; error?: string }> {
   const apiKey   = process.env.RESEND_API_KEY
-  const fromAddr = process.env.EMAIL_FROM ?? "support@noreply.safir"
-  if (!apiKey) return { sent: false, error: "not-configured" }
+  const fromAddr = process.env.SUPPORT_FROM_EMAIL
+  if (!apiKey || !fromAddr) return { sent: false, error: "not-configured" }
   try {
     const res = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ from: fromAddr, to: opts.to, subject: opts.subject, html: opts.html }),
     })
-    if (!res.ok) return { sent: false, error: await res.text() }
+    if (!res.ok) {
+      const body = await res.text()
+      console.error(`[support-email] Resend error ${res.status}: ${body}`)
+      return { sent: false, error: body }
+    }
     return { sent: true }
   } catch (err) {
+    console.error("[support-email] Network error:", err)
     return { sent: false, error: String(err) }
   }
 }
@@ -53,8 +58,10 @@ async function getAuthContext() {
 
   // Resolve the sender display name at auth time so every message insert can
   // store it directly — no fragile runtime join needed later.
-  let senderName = "Support Team"
-  if (!isAdmin && clientId) {
+  let senderName: string
+  if (isAdmin) {
+    senderName = "Support Team"
+  } else if (clientId) {
     const admin = createServerAdminClient()
     const { data: clientRow } = await admin
       .from("clients")
@@ -64,6 +71,9 @@ async function getAuthContext() {
     // Prefer the individual contact name; fall back to company name
     const row = clientRow as Record<string, string | null> | null
     senderName = row?.contact_name || row?.company_name || user.email || "Client"
+  } else {
+    // Non-admin without a client_id claim — use email as display name
+    senderName = user.email || "Client"
   }
 
   // Cast to any: support_tickets / support_ticket_messages are new tables not
@@ -128,7 +138,7 @@ async function mapMessage(row: any): Promise<TicketMessage> {
 
 // ── listTickets ───────────────────────────────────────────────
 
-export async function listTickets(archived = false): Promise<SupportTicket[]> {
+export async function listTickets(): Promise<SupportTicket[]> {
   const { supabase } = await getAuthContext()
   const { data, error } = await supabase
     .from("support_tickets")
@@ -146,8 +156,6 @@ export async function listTickets(archived = false): Promise<SupportTicket[]> {
   }
 
   return (data ?? [])
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .filter((r: any) => archived ? r.archived_at != null : r.archived_at == null)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     .map((r: any) => ({
       ...mapTicket(r),

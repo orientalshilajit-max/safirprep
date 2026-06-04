@@ -44,7 +44,7 @@ type Props = {
   messages: TicketMessage[]
   isAdmin:  boolean
   onClose:  () => void
-  onReplied:  (newMsg: TicketMessage, emailSent: boolean) => void
+  onReplied:  (newMsg: TicketMessage, emailSent: boolean, emailError?: string) => void
   onStatusChanged: (id: string, status: TicketStatus) => void
   onArchived:  (id: string) => void
   onRestored:  (id: string) => void
@@ -104,16 +104,19 @@ export function TicketDetailModal({
       }
 
       const { replyToTicket } = await import("@/app/help/actions")
-      const { message: newMsg, emailSent } = await replyToTicket({
+      const { message: newMsg, emailSent, emailError } = await replyToTicket({
         ticketId: t.id,
         message: replyText.trim(),
         attachments,
       })
 
       setReplyText(""); setFiles([])
-      if (!emailSent) setNotice("Reply saved. Email notification could not be sent.")
-      else setNotice("")
-      onReplied(newMsg, emailSent)
+      if (emailError === "not-configured") {
+        setNotice("Reply saved. Email provider is not configured.")
+      } else {
+        setNotice("")
+      }
+      onReplied(newMsg, emailSent, emailError)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to send reply.")
     } finally {

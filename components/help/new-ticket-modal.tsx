@@ -28,7 +28,7 @@ type PendingFile = { file: File; id: string }
 type Props = {
   isOpen: boolean
   onClose: () => void
-  onCreated: (ticketId: string, emailSent: boolean) => void
+  onCreated: (ticketId: string, emailSent: boolean, emailError?: string) => void
   /** Admin only — list of clients to choose from. Omit for client role. */
   adminClients?: { id: string; name: string }[]
   /** Pre-selected client (for client role — pass client_id from auth). */
@@ -98,7 +98,7 @@ export function NewTicketModal({
 
       // Lazy-import server action to avoid bundling it on the client
       const { createTicket } = await import("@/app/help/actions")
-      const { ticket, emailSent } = await createTicket({
+      const { ticket, emailSent, emailError } = await createTicket({
         clientId: clientId || (defaultClientId ?? ""),
         subject: subject.trim(),
         category: category as TicketCategory,
@@ -107,7 +107,7 @@ export function NewTicketModal({
       })
 
       reset()
-      onCreated(ticket.id, emailSent)
+      onCreated(ticket.id, emailSent, emailError)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create ticket.")
     } finally {
