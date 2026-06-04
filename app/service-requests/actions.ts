@@ -3,6 +3,7 @@
 import { createSupabaseServerClient } from "@/lib/supabase-server"
 import { createServerAdminClient }     from "@/lib/supabase"
 import type { ServiceRequest, RequestService, ServiceStatus, ServiceType, ServiceDetails } from "@/lib/types"
+import { createNotification } from "@/lib/notifications-server"
 
 // ── Status mapping ────────────────────────────────────────────
 
@@ -329,7 +330,23 @@ export async function createRequest(input: CreateInput): Promise<ServiceRequest>
     .eq("id", req.id)
     .single()
   if (fErr) throw new Error(fErr.message)
-  return mapRow(full as unknown as DbRow)
+  const result = mapRow(full as unknown as DbRow)
+
+  if (!isAdmin) {
+    void createNotification({
+      recipientRole: "admin",
+      actorUserId:   user.id,
+      actorRole:     "client",
+      type:          "request_created",
+      title:         "New service request",
+      message:       `${result.clientName} created service request ${result.requestNumber}.`,
+      entityType:    "service_request",
+      entityId:      result.id,
+      linkUrl:       "/service-requests",
+    })
+  }
+
+  return result
 }
 
 // ── updateRequest ─────────────────────────────────────────────
@@ -438,7 +455,34 @@ export async function updateRequest(id: string, input: UpdateInput): Promise<Ser
     .eq("id", id)
     .single()
   if (fErr) throw new Error(fErr.message)
-  return mapRow(full as unknown as DbRow)
+  const result = mapRow(full as unknown as DbRow)
+
+  if (!isAdmin) {
+    void createNotification({
+      recipientRole: "admin",
+      actorUserId:   user.id,
+      actorRole:     "client",
+      type:          "request_updated",
+      title:         "Service request updated",
+      message:       `${result.clientName} updated service request ${result.requestNumber}.`,
+      entityType:    "service_request",
+      entityId:      result.id,
+      linkUrl:       "/service-requests",
+    })
+  } else {
+    void createNotification({
+      recipientClientId: result.clientId,
+      actorRole:         "admin",
+      type:              "request_updated_by_admin",
+      title:             "Service request updated",
+      message:           `Service request ${result.requestNumber} has been updated.`,
+      entityType:        "service_request",
+      entityId:          result.id,
+      linkUrl:           "/service-requests",
+    })
+  }
+
+  return result
 }
 
 // ── updateRequestStatus ───────────────────────────────────────
@@ -491,7 +535,23 @@ export async function updateRequestStatus(
     .eq("id", id)
     .single()
   if (fErr) throw new Error(fErr.message)
-  return mapRow(full as unknown as DbRow)
+  const result = mapRow(full as unknown as DbRow)
+
+  const isNeedAttention = newStatus === "Need Attention"
+  void createNotification({
+    recipientClientId: result.clientId,
+    actorRole:         "admin",
+    type:              "request_status_updated",
+    title:             isNeedAttention ? "Action needed on service request" : "Service request status updated",
+    message:           isNeedAttention
+      ? `Service request ${result.requestNumber} requires your attention.`
+      : `Service request ${result.requestNumber} is now ${newStatus}.`,
+    entityType:        "service_request",
+    entityId:          result.id,
+    linkUrl:           "/service-requests",
+  })
+
+  return result
 }
 
 // ── archiveRequest ────────────────────────────────────────────

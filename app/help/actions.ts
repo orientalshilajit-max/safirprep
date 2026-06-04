@@ -5,6 +5,7 @@ import { createServerAdminClient }    from "@/lib/supabase"
 import type {
   SupportTicket, TicketMessage, TicketCategory, TicketStatus, TicketAttachment,
 } from "@/lib/types"
+import { createNotification } from "@/lib/notifications-server"
 
 // ── Email helper (Resend – graceful fallback) ─────────────────
 
@@ -305,6 +306,20 @@ export async function createTicket(
     emailSent = true
   }
 
+  if (!isAdmin) {
+    void createNotification({
+      recipientRole: "admin",
+      actorUserId:   user.id,
+      actorRole:     "client",
+      type:          "ticket_created",
+      title:         "New support ticket",
+      message:       `${senderName} created ticket ${ticket.ticketNumber}.`,
+      entityType:    "support_ticket",
+      entityId:      ticket.id,
+      linkUrl:       "/help",
+    })
+  }
+
   return { ticket, emailSent, emailError }
 }
 
@@ -415,6 +430,31 @@ export async function replyToTicket(
     } else {
       emailSent = true
     }
+  }
+
+  if (isAdmin) {
+    void createNotification({
+      recipientClientId: t.client_id as string,
+      actorRole:         "admin",
+      type:              "ticket_reply",
+      title:             "Support replied",
+      message:           `Support Team replied to ticket ${t.ticket_number as string}.`,
+      entityType:        "support_ticket",
+      entityId:          input.ticketId,
+      linkUrl:           "/help",
+    })
+  } else {
+    void createNotification({
+      recipientRole: "admin",
+      actorUserId:   user.id,
+      actorRole:     "client",
+      type:          "ticket_reply",
+      title:         "Client replied on ticket",
+      message:       `${senderName} replied to ticket ${t.ticket_number as string}.`,
+      entityType:    "support_ticket",
+      entityId:      input.ticketId,
+      linkUrl:       "/help",
+    })
   }
 
   return { message, emailSent, emailError }

@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache"
 import { createSupabaseServerClient } from "@/lib/supabase-server"
 import { createServerAdminClient }     from "@/lib/supabase"
 import type { Shipment, ShipmentStatus } from "@/lib/types"
+import { createNotification } from "@/lib/notifications-server"
 
 // ── Status mapping ────────────────────────────────────────────
 
@@ -254,7 +255,23 @@ export async function createShipment(input: CreateInput): Promise<Shipment> {
     .eq("id", ship.id)
     .single()
   if (fErr) throw new Error(fErr.message)
-  return mapRow(full)
+  const result = mapRow(full)
+
+  if (!isAdmin) {
+    void createNotification({
+      recipientRole: "admin",
+      actorUserId:   user.id,
+      actorRole:     "client",
+      type:          "shipment_created",
+      title:         "New incoming shipment",
+      message:       `${result.clientName} created shipment ${result.shipmentNumber}.`,
+      entityType:    "shipment",
+      entityId:      result.id,
+      linkUrl:       "/shipments",
+    })
+  }
+
+  return result
 }
 
 // ── updateShipment ────────────────────────────────────────────
@@ -472,7 +489,34 @@ export async function updateShipment(id: string, input: UpdateInput): Promise<Sh
     .eq("id", id)
     .single()
   if (fErr) throw new Error(fErr.message)
-  return mapRow(full)
+  const result = mapRow(full)
+
+  if (isAdmin && currentDbStatus !== newDbStatus) {
+    void createNotification({
+      recipientClientId: result.clientId,
+      actorRole:         "admin",
+      type:              "shipment_status_updated",
+      title:             "Shipment status updated",
+      message:           `Your shipment ${result.shipmentNumber} was marked ${result.status}.`,
+      entityType:        "shipment",
+      entityId:          result.id,
+      linkUrl:           "/shipments",
+    })
+  } else if (!isAdmin) {
+    void createNotification({
+      recipientRole: "admin",
+      actorUserId:   user.id,
+      actorRole:     "client",
+      type:          "shipment_updated",
+      title:         "Shipment updated",
+      message:       `${result.clientName} updated shipment ${result.shipmentNumber}.`,
+      entityType:    "shipment",
+      entityId:      result.id,
+      linkUrl:       "/shipments",
+    })
+  }
+
+  return result
 }
 
 // ── archiveShipment ───────────────────────────────────────────

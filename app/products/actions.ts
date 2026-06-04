@@ -3,6 +3,7 @@
 import { createSupabaseServerClient } from "@/lib/supabase-server"
 import { createServerAdminClient } from "@/lib/supabase"
 import type { Product } from "@/lib/types"
+import { createNotification } from "@/lib/notifications-server"
 
 const PRODUCT_IMAGE_BUCKET = "product-images"
 const ALLOWED_IMAGE_TYPES  = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
@@ -211,7 +212,23 @@ export async function createProduct(input: ProductFields): Promise<Product> {
     .eq("id", product.id)
     .single()
   if (fErr) throw new Error(fErr.message)
-  return mapRow(full)
+  const result = mapRow(full)
+
+  if (!isAdmin) {
+    void createNotification({
+      recipientRole: "admin",
+      actorUserId:   user.id,
+      actorRole:     "client",
+      type:          "product_created",
+      title:         "New product added",
+      message:       `${result.clientName} added product "${result.name}".`,
+      entityType:    "product",
+      entityId:      result.id,
+      linkUrl:       "/products",
+    })
+  }
+
+  return result
 }
 
 /**
@@ -267,7 +284,23 @@ export async function updateProduct(
     .eq("id", id)
     .single()
   if (fErr) throw new Error(fErr.message)
-  return mapRow(full)
+  const result = mapRow(full)
+
+  if (!isAdmin) {
+    void createNotification({
+      recipientRole: "admin",
+      actorUserId:   user.id,
+      actorRole:     "client",
+      type:          "product_updated",
+      title:         "Product updated",
+      message:       `${result.clientName} updated product "${result.name}".`,
+      entityType:    "product",
+      entityId:      result.id,
+      linkUrl:       "/products",
+    })
+  }
+
+  return result
 }
 
 // ── archiveProduct ────────────────────────────────────────────

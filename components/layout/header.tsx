@@ -1,9 +1,10 @@
 "use client"
 
-import { Bell, LogOut, RefreshCw, Menu } from "lucide-react"
+import { LogOut, RefreshCw, Menu } from "lucide-react"
 import { cn } from "@/lib/utils"
 import type { UserRole } from "@/lib/types"
 import type { AuthUser } from "@/lib/auth"
+import { NotificationBell } from "./notification-bell"
 
 type HeaderProps = {
   role: UserRole
@@ -90,10 +91,7 @@ export function Header({
         )}
 
         {/* Notifications */}
-        <button className="relative flex size-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors">
-          <Bell className="size-[16px]" />
-          <span className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-blue-500" />
-        </button>
+        <NotificationBell isMockMode={isMockMode} />
 
         {/* User avatar + name */}
         <div className="flex items-center gap-2 pl-2 sm:pl-3 border-l border-gray-200">

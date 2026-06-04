@@ -2,6 +2,7 @@
 
 import { createSupabaseServerClient } from "@/lib/supabase-server"
 import type { Invoice, InvoiceStatus, InvoiceLineItem } from "@/lib/types"
+import { createNotification } from "@/lib/notifications-server"
 
 // ── Status mapping ────────────────────────────────────────────
 
@@ -204,7 +205,20 @@ export async function createInvoice(input: CreateInput): Promise<Invoice> {
     .eq("id", inv.id)
     .single()
   if (fErr) throw new Error(fErr.message)
-  return mapRow(full as unknown as DbInvoiceRow)
+  const result = mapRow(full as unknown as DbInvoiceRow)
+
+  void createNotification({
+    recipientClientId: result.clientId,
+    actorRole:         "admin",
+    type:              "invoice_created",
+    title:             "Invoice created",
+    message:           `Invoice ${result.invoiceNumber} is ready.`,
+    entityType:        "invoice",
+    entityId:          result.id,
+    linkUrl:           "/invoices",
+  })
+
+  return result
 }
 
 // ── updateInvoice ─────────────────────────────────────────────
@@ -279,7 +293,20 @@ export async function updateInvoiceStatus(id: string, status: InvoiceStatus): Pr
     .eq("id", id)
     .single()
   if (fErr) throw new Error(fErr.message)
-  return mapRow(data as unknown as DbInvoiceRow)
+  const result = mapRow(data as unknown as DbInvoiceRow)
+
+  void createNotification({
+    recipientClientId: result.clientId,
+    actorRole:         "admin",
+    type:              "invoice_status_updated",
+    title:             "Invoice status updated",
+    message:           `Invoice ${result.invoiceNumber} is now ${status}.`,
+    entityType:        "invoice",
+    entityId:          result.id,
+    linkUrl:           "/invoices",
+  })
+
+  return result
 }
 
 // ── bulkUpdateInvoiceStatus ───────────────────────────────────
@@ -420,5 +447,18 @@ export async function combineInvoices(invoiceIds: string[]): Promise<Invoice> {
     .eq("id", newInv.id)
     .single()
   if (fErr) throw new Error(fErr.message)
-  return mapRow(full as unknown as DbInvoiceRow)
+  const result = mapRow(full as unknown as DbInvoiceRow)
+
+  void createNotification({
+    recipientClientId: result.clientId,
+    actorRole:         "admin",
+    type:              "invoices_combined",
+    title:             "Invoices combined",
+    message:           `${invoiceIds.length} invoices have been combined into ${result.invoiceNumber}.`,
+    entityType:        "invoice",
+    entityId:          result.id,
+    linkUrl:           "/invoices",
+  })
+
+  return result
 }

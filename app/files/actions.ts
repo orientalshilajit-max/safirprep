@@ -1,5 +1,7 @@
 "use server"
 
+import { createNotification } from "@/lib/notifications-server"
+
 // ============================================================
 // Safir WMS – Files Server Actions
 //
@@ -241,5 +243,32 @@ export async function uploadFile(formData: FormData): Promise<FileDoc> {
     .eq("id", record.id)
     .single()
   if (fErr) throw new Error(fErr.message)
-  return mapRow(full as unknown as DbFileRow)
+  const result = mapRow(full as unknown as DbFileRow)
+
+  if (!isAdmin) {
+    void createNotification({
+      recipientRole: "admin",
+      actorUserId:   user.id,
+      actorRole:     "client",
+      type:          "file_uploaded",
+      title:         "File uploaded",
+      message:       `${result.clientName} uploaded file "${result.name}".`,
+      entityType:    "file",
+      entityId:      result.id,
+      linkUrl:       "/files",
+    })
+  } else {
+    void createNotification({
+      recipientClientId: clientId,
+      actorRole:         "admin",
+      type:              "file_shared",
+      title:             "New file available",
+      message:           `A new file "${result.name}" has been shared with you.`,
+      entityType:        "file",
+      entityId:          result.id,
+      linkUrl:           "/files",
+    })
+  }
+
+  return result
 }

@@ -12,6 +12,7 @@ import {
   Settings,
   Users,
   HelpCircle,
+  Bell,
   Box,
   X,
 } from "lucide-react"
@@ -19,23 +20,25 @@ import { cn } from "@/lib/utils"
 import type { UserRole } from "@/lib/types"
 
 const clientNav = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Products", href: "/products", icon: Package },
-  { label: "Incoming Shipments", href: "/shipments", icon: Truck },
-  { label: "Service Requests", href: "/service-requests", icon: Wrench },
-  { label: "Files & Documents", href: "/files", icon: FolderOpen },
-  { label: "Invoices", href: "/invoices", icon: FileText },
+  { label: "Dashboard",           href: "/dashboard",         icon: LayoutDashboard },
+  { label: "Products",            href: "/products",          icon: Package },
+  { label: "Incoming Shipments",  href: "/shipments",         icon: Truck },
+  { label: "Service Requests",    href: "/service-requests",  icon: Wrench },
+  { label: "Files & Documents",   href: "/files",             icon: FolderOpen },
+  { label: "Invoices",            href: "/invoices",          icon: FileText },
+  { label: "Notifications",       href: "/notifications",     icon: Bell },
 ]
 
 const adminNav = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  { label: "Clients", href: "/clients", icon: Users },
-  { label: "Products", href: "/products", icon: Package },
-  { label: "Incoming Shipments", href: "/shipments", icon: Truck },
-  { label: "Service Requests", href: "/service-requests", icon: Wrench },
-  { label: "Files & Documents", href: "/files", icon: FolderOpen },
-  { label: "Invoices", href: "/invoices", icon: FileText },
-  { label: "Settings", href: "/settings", icon: Settings },
+  { label: "Dashboard",           href: "/dashboard",         icon: LayoutDashboard },
+  { label: "Clients",             href: "/clients",           icon: Users },
+  { label: "Products",            href: "/products",          icon: Package },
+  { label: "Incoming Shipments",  href: "/shipments",         icon: Truck },
+  { label: "Service Requests",    href: "/service-requests",  icon: Wrench },
+  { label: "Files & Documents",   href: "/files",             icon: FolderOpen },
+  { label: "Invoices",            href: "/invoices",          icon: FileText },
+  { label: "Notifications",       href: "/notifications",     icon: Bell },
+  { label: "Settings",            href: "/settings",          icon: Settings },
 ]
 
 type SidebarProps = {
