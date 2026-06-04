@@ -242,3 +242,66 @@ export type DataTableColumn<T> = {
   className?: string
   headerClassName?: string
 }
+
+// ── Support Tickets ───────────────────────────────────────────
+
+export type TicketCategory =
+  | "General Question"
+  | "Incoming Shipment"
+  | "Service Request"
+  | "Product / Inventory"
+  | "Invoice / Payment"
+  | "Technical Issue"
+  | "Other"
+
+export const TICKET_CATEGORIES: TicketCategory[] = [
+  "General Question",
+  "Incoming Shipment",
+  "Service Request",
+  "Product / Inventory",
+  "Invoice / Payment",
+  "Technical Issue",
+  "Other",
+]
+
+export type TicketStatus =
+  | "Open"
+  | "Waiting for Client"
+  | "Waiting for Admin"
+  | "Resolved"
+  | "Archived"
+
+export type TicketAttachment = {
+  name: string
+  path: string   // storage path  (e.g. "uploads/{uuid}/{filename}")
+  size: number
+  type: string
+  url?: string   // signed URL — populated at read time, not stored
+}
+
+export type SupportTicket = {
+  id: string
+  ticketNumber: string
+  clientId: string
+  clientName: string
+  subject: string
+  category: TicketCategory
+  status: TicketStatus
+  assignedTo?: string | null
+  createdBy: string
+  archivedAt?: string | null
+  createdAt: string
+  updatedAt: string
+  messageCount: number
+}
+
+export type TicketMessage = {
+  id: string
+  ticketId: string
+  senderUserId: string
+  senderRole: "admin" | "client"
+  senderName: string
+  message: string
+  attachments: TicketAttachment[]
+  createdAt: string
+}
