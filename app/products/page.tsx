@@ -1,7 +1,7 @@
 "use client"
 
 import Image from "next/image"
-import { useState, useMemo, useEffect } from "react"
+import { useState, useMemo, useEffect, useRef } from "react"
 import {
   Search, SlidersHorizontal, Plus, Pencil,
   Archive, ArchiveRestore, Trash2,
@@ -17,6 +17,12 @@ import { ConfirmModal } from "@/components/ui/confirm-modal"
 import { ProductModal } from "@/components/products/product-modal"
 import type { ProductFormData } from "@/components/products/product-modal"
 import {
+  ProductFilterPanel,
+  DEFAULT_FILTERS,
+  countActiveFilters,
+} from "@/components/products/product-filter-panel"
+import type { ProductFilters } from "@/components/products/product-filter-panel"
+import {
   createProduct,
   updateProduct,
   archiveProduct,
@@ -28,20 +34,24 @@ import {
 import type { Product, DataTableColumn } from "@/lib/types"
 
 const PAGE_SIZE = 8
+const LOW_STOCK_THRESHOLD = 10
 
 export default function ProductsPage() {
   const { role } = useRole()
   const { products, setProducts } = useProducts()
   const isMockMode = useIsMockMode()
 
-  const [search,        setSearch]        = useState("")
-  const [statusFilter,  setStatusFilter]  = useState<"all" | "Active" | "Archived">("Active")
-  const [page,          setPage]          = useState(1)
-  const [modalOpen,     setModalOpen]     = useState(false)
-  const [editing,       setEditing]       = useState<Product | null>(null)
-  const [previewImage,  setPreviewImage]  = useState<string | null>(null)
-  const [deleteTarget,  setDeleteTarget]  = useState<Product | null>(null)
-  const [actionMessage, setActionMessage] = useState<{ type: "success" | "error"; text: string } | null>(null)
+  const [search,           setSearch]           = useState("")
+  const [statusFilter,     setStatusFilter]      = useState<"all" | "Active" | "Archived">("Active")
+  const [page,             setPage]             = useState(1)
+  const [modalOpen,        setModalOpen]        = useState(false)
+  const [editing,          setEditing]          = useState<Product | null>(null)
+  const [previewImage,     setPreviewImage]     = useState<string | null>(null)
+  const [deleteTarget,     setDeleteTarget]     = useState<Product | null>(null)
+  const [actionMessage,    setActionMessage]    = useState<{ type: "success" | "error"; text: string } | null>(null)
+  const [activeFilters,    setActiveFilters]    = useState<ProductFilters>(DEFAULT_FILTERS)
+  const [filterPanelOpen,  setFilterPanelOpen]  = useState(false)
+  const filterBtnRef = useRef<HTMLButtonElement>(null)
 
   // Client list for admin product-creation (Supabase mode only)
   const [pageClients, setPageClients] = useState<{ id: string; name: string }[]>([])
@@ -61,24 +71,96 @@ export default function ProductsPage() {
     return () => window.removeEventListener("keydown", onKey)
   }, [previewImage])
 
+  /* ── Unique clients for filter panel (derived from visible products) ── */
+  const availableClients = useMemo(() => {
+    if (role !== "admin") return []
+    const map = new Map<string, string>()
+    for (const p of products) {
+      if (p.clientId && p.clientName && !map.has(p.clientId)) {
+        map.set(p.clientId, p.clientName)
+      }
+    }
+    return Array.from(map.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [products, role])
+
+  /* ── Summary stats (across all user-visible products) ── */
+  const stats = useMemo(() => {
+    const active = products.filter((p) => p.status === "Active")
+    return {
+      total:        products.length,
+      inStock:      active.filter((p) => p.available > 0).length,
+      incomingOnly: active.filter((p) => p.available === 0 && p.incoming > 0).length,
+      outOfStock:   active.filter((p) => p.available === 0 && p.incoming === 0).length,
+      archived:     products.filter((p) => p.status === "Archived").length,
+    }
+  }, [products])
+
   /* ── Derived state ───────────────────────────────────── */
   const filtered = useMemo(() => {
-    const q = search.toLowerCase().trim()
+    const q   = search.toLowerCase().trim()
+    const now = new Date()
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime()
+    const ms7d  = now.getTime() - 7  * 86_400_000
+    const ms30d = now.getTime() - 30 * 86_400_000
+
     return products.filter((p) => {
-      const matchSearch =
-        !q ||
-        p.name.toLowerCase().includes(q) ||
-        p.sku.toLowerCase().includes(q) ||
-        p.asin.toLowerCase().includes(q) ||
-        p.fnsku.toLowerCase().includes(q)
-      const matchStatus = statusFilter === "all" || p.status === statusFilter
-      return matchSearch && matchStatus
+      // Search
+      if (q) {
+        const hit =
+          p.name.toLowerCase().includes(q) ||
+          p.sku.toLowerCase().includes(q) ||
+          p.asin.toLowerCase().includes(q) ||
+          p.fnsku.toLowerCase().includes(q)
+        if (!hit) return false
+      }
+
+      // Status dropdown
+      if (statusFilter !== "all" && p.status !== statusFilter) return false
+
+      // ── Advanced filters ──────────────────────────────
+
+      // Client (admin only, multi-select)
+      if (activeFilters.clientIds.length > 0 && !activeFilters.clientIds.includes(p.clientId)) return false
+
+      // Inventory status
+      if (activeFilters.inventoryStatus) {
+        if (activeFilters.inventoryStatus === "in-stock"      && !(p.available > 0))                            return false
+        if (activeFilters.inventoryStatus === "incoming-only" && !(p.available === 0 && p.incoming > 0))        return false
+        if (activeFilters.inventoryStatus === "out-of-stock"  && !(p.available === 0 && p.incoming === 0))      return false
+        if (activeFilters.inventoryStatus === "low-stock"     && !(p.available <= LOW_STOCK_THRESHOLD))         return false
+      }
+
+      // Has incoming shipment
+      if (activeFilters.hasIncoming === "yes" && p.incoming === 0) return false
+      if (activeFilters.hasIncoming === "no"  && p.incoming > 0)   return false
+
+      // Date added
+      if (activeFilters.dateAdded && p.createdAt) {
+        const t = new Date(p.createdAt).getTime()
+        if (activeFilters.dateAdded === "today" && t < startOfToday)  return false
+        if (activeFilters.dateAdded === "7d"    && t < ms7d)          return false
+        if (activeFilters.dateAdded === "30d"   && t < ms30d)         return false
+        if (activeFilters.dateAdded === "custom") {
+          if (activeFilters.dateFrom && t < new Date(activeFilters.dateFrom).getTime())                   return false
+          if (activeFilters.dateTo   && t > new Date(activeFilters.dateTo + "T23:59:59").getTime())       return false
+        }
+      }
+
+      // Image status
+      if (activeFilters.imageStatus === "has-image" && !p.image)  return false
+      if (activeFilters.imageStatus === "no-image"  && !!p.image) return false
+
+      return true
     })
-  }, [products, search, statusFilter])
+  }, [products, search, statusFilter, activeFilters])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const safePage   = Math.min(page, totalPages)
   const paginated  = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+
+  const activeFilterCount = countActiveFilters(activeFilters)
 
   /* ── Helpers ─────────────────────────────────────────── */
   function flash(type: "success" | "error", text: string) {
@@ -86,8 +168,8 @@ export default function ProductsPage() {
     if (type === "success") setTimeout(() => setActionMessage(null), 3000)
   }
 
-  function openAdd()        { setEditing(null); setModalOpen(true) }
-  function openEdit(p: Product) { setEditing(p);  setModalOpen(true) }
+  function openAdd()             { setEditing(null); setModalOpen(true) }
+  function openEdit(p: Product)  { setEditing(p);  setModalOpen(true) }
 
   /* ── Save ────────────────────────────────────────────── */
   async function handleSave(data: ProductFormData) {
@@ -255,7 +337,6 @@ export default function ProductsPage() {
           </IconButton>
 
           {row.status === "Active" ? (
-            /* Active product: Archive */
             <IconButton
               variant="danger"
               onClick={() => handleArchive(row.id)}
@@ -264,7 +345,6 @@ export default function ProductsPage() {
               <Archive className="size-3.5" />
             </IconButton>
           ) : (
-            /* Archived product: Restore + Delete Permanently */
             <>
               <IconButton
                 variant="primary"
@@ -300,6 +380,8 @@ export default function ProductsPage() {
     role === "admin"
       ? [...baseColumns.slice(0, 2), adminClientCol, ...baseColumns.slice(2)]
       : baseColumns
+
+  const hasAnyFilter = !!search || statusFilter !== "Active" || activeFilterCount > 0
 
   /* ── Render ──────────────────────────────────────────── */
   return (
@@ -347,6 +429,7 @@ export default function ProductsPage() {
 
       {/* Table card */}
       <div className="bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col overflow-hidden flex-1 min-h-0">
+
         {/* Toolbar */}
         <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-gray-200">
           <div className="relative flex-1 min-w-[140px]">
@@ -370,10 +453,41 @@ export default function ProductsPage() {
             <option value="all">All Products</option>
           </select>
 
-          <button className="flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
+          <button
+            ref={filterBtnRef}
+            onClick={() => setFilterPanelOpen((v) => !v)}
+            className={`flex items-center gap-1.5 px-3 py-2 text-[13px] font-medium border rounded-lg transition-colors ${
+              filterPanelOpen || activeFilterCount > 0
+                ? "bg-blue-50 border-blue-300 text-blue-700"
+                : "text-gray-600 border-gray-200 hover:bg-gray-50"
+            }`}
+          >
             <SlidersHorizontal className="size-3.5" />
-            Filters
+            {activeFilterCount > 0 ? `Filters (${activeFilterCount})` : "Filters"}
           </button>
+        </div>
+
+        {/* Stats row */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2 border-b border-gray-100 bg-gray-50/60">
+          <span className="text-[12px] text-gray-500">
+            Products: <span className="font-semibold text-gray-700">{stats.total}</span>
+          </span>
+          <span className="text-gray-200 select-none">|</span>
+          <span className="text-[12px] text-gray-500">
+            In Stock: <span className="font-semibold text-gray-700">{stats.inStock}</span>
+          </span>
+          <span className="text-gray-200 select-none">|</span>
+          <span className="text-[12px] text-gray-500">
+            Incoming Only: <span className="font-semibold text-gray-700">{stats.incomingOnly}</span>
+          </span>
+          <span className="text-gray-200 select-none">|</span>
+          <span className="text-[12px] text-gray-500">
+            Out of Stock: <span className="font-semibold text-gray-700">{stats.outOfStock}</span>
+          </span>
+          <span className="text-gray-200 select-none">|</span>
+          <span className="text-[12px] text-gray-500">
+            Archived: <span className="font-semibold text-gray-700">{stats.archived}</span>
+          </span>
         </div>
 
         {/* Table */}
@@ -426,12 +540,12 @@ export default function ProductsPage() {
               <EmptyState
                 title="No products found"
                 description={
-                  search || statusFilter !== "all"
-                    ? "Try adjusting your search or filter."
+                  hasAnyFilter
+                    ? "Try adjusting your search or filters."
                     : "Add your first product to get started."
                 }
                 action={
-                  !search && statusFilter === "Active" && (
+                  !hasAnyFilter && (
                     <button
                       onClick={openAdd}
                       className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 text-white text-[13px] font-semibold rounded-lg hover:bg-blue-700 transition-colors"
@@ -503,6 +617,19 @@ export default function ProductsPage() {
           </div>
         </div>
       </div>
+
+      {/* Filter panel — conditionally rendered so it mounts fresh on each open */}
+      {filterPanelOpen && (
+        <ProductFilterPanel
+          onClose={() => setFilterPanelOpen(false)}
+          anchorRef={filterBtnRef}
+          appliedFilters={activeFilters}
+          onApply={(f) => { setActiveFilters(f); setPage(1) }}
+          onClear={() => { setActiveFilters(DEFAULT_FILTERS); setPage(1) }}
+          clients={availableClients}
+          isAdmin={role === "admin"}
+        />
+      )}
 
       {/* Add / Edit modal */}
       <ProductModal

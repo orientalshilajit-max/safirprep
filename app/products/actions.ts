@@ -77,7 +77,7 @@ function fromDbStatus(s: "active" | "archived"): "Active" | "Archived" {
 
 // Shared select clause for products with inventory and client name
 const PRODUCT_SELECT = `
-  id, client_id, name, sku, asin_upc, fnsku, image_url, notes, status,
+  id, client_id, name, sku, asin_upc, fnsku, image_url, notes, status, created_at,
   inventory (available_units, incoming_units, damaged_units),
   clients (company_name)
 ` as const
@@ -99,6 +99,7 @@ function mapRow(row: any): Product {
     available: inv?.available_units ?? 0,
     incoming: inv?.incoming_units ?? 0,
     damaged: inv?.damaged_units ?? 0,
+    createdAt: row.created_at ?? undefined,
   }
 }
 

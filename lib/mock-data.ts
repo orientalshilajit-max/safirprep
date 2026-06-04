@@ -15,6 +15,7 @@ export const mockProducts: Product[] = [
     clientId: "c1",
     clientName: "TechVault Co.",
     notes: "",
+    createdAt: "2026-06-04T09:00:00Z",
   },
   {
     id: "p2",
@@ -30,6 +31,7 @@ export const mockProducts: Product[] = [
     clientId: "c2",
     clientName: "NovaTrade Ltd.",
     notes: "",
+    createdAt: "2026-06-02T14:30:00Z",
   },
   {
     id: "p3",
@@ -45,6 +47,7 @@ export const mockProducts: Product[] = [
     clientId: "c1",
     clientName: "TechVault Co.",
     notes: "",
+    createdAt: "2026-05-29T11:00:00Z",
   },
   {
     id: "p4",
@@ -60,6 +63,7 @@ export const mockProducts: Product[] = [
     clientId: "c3",
     clientName: "BrightBox LLC",
     notes: "",
+    createdAt: "2026-05-20T08:00:00Z",
   },
   {
     id: "p5",
@@ -75,6 +79,7 @@ export const mockProducts: Product[] = [
     clientId: "c2",
     clientName: "NovaTrade Ltd.",
     notes: "",
+    createdAt: "2026-05-10T16:00:00Z",
   },
   {
     id: "p6",
@@ -90,6 +95,7 @@ export const mockProducts: Product[] = [
     clientId: "c3",
     clientName: "BrightBox LLC",
     notes: "",
+    createdAt: "2026-04-15T10:00:00Z",
   },
   {
     id: "p7",
@@ -105,6 +111,7 @@ export const mockProducts: Product[] = [
     clientId: "c1",
     clientName: "TechVault Co.",
     notes: "",
+    createdAt: "2026-06-03T07:45:00Z",
   },
   {
     id: "p8",
@@ -120,6 +127,7 @@ export const mockProducts: Product[] = [
     clientId: "c4",
     clientName: "Stellar Goods",
     notes: "",
+    createdAt: "2026-05-15T13:00:00Z",
   },
   {
     id: "p9",
@@ -135,6 +143,7 @@ export const mockProducts: Product[] = [
     clientId: "c3",
     clientName: "BrightBox LLC",
     notes: "Discontinued product",
+    createdAt: "2026-04-01T12:00:00Z",
   },
   {
     id: "p10",
@@ -150,6 +159,7 @@ export const mockProducts: Product[] = [
     clientId: "c4",
     clientName: "Stellar Goods",
     notes: "",
+    createdAt: "2026-05-28T09:30:00Z",
   },
   {
     id: "p11",
@@ -165,6 +175,7 @@ export const mockProducts: Product[] = [
     clientId: "c1",
     clientName: "TechVault Co.",
     notes: "",
+    createdAt: "2026-06-01T15:00:00Z",
   },
   {
     id: "p12",
@@ -180,5 +191,6 @@ export const mockProducts: Product[] = [
     clientId: "c2",
     clientName: "NovaTrade Ltd.",
     notes: "",
+    createdAt: "2026-03-15T11:00:00Z",
   },
 ]

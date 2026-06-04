@@ -85,6 +85,7 @@ export type Product = {
   clientId: string
   clientName: string
   notes: string
+  createdAt?: string
 }
 
 export type ShipmentProduct = {
