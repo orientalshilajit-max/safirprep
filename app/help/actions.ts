@@ -47,13 +47,30 @@ async function getAuthContext() {
   const supabaseTyped = await createSupabaseServerClient()
   const { data: { user } } = await supabaseTyped.auth.getUser()
   if (!user) throw new Error("Unauthorized")
+
   const isAdmin  = user.app_metadata?.role === "admin"
   const clientId = user.app_metadata?.client_id as string | undefined
-  // Cast to any because support_tickets / support_ticket_messages are new tables
-  // not yet present in the generated Supabase TypeScript types.
+
+  // Resolve the sender display name at auth time so every message insert can
+  // store it directly — no fragile runtime join needed later.
+  let senderName = "Support Team"
+  if (!isAdmin && clientId) {
+    const admin = createServerAdminClient()
+    const { data: clientRow } = await admin
+      .from("clients")
+      .select("company_name, contact_name")
+      .eq("id", clientId)
+      .maybeSingle()
+    // Prefer the individual contact name; fall back to company name
+    const row = clientRow as Record<string, string | null> | null
+    senderName = row?.contact_name || row?.company_name || user.email || "Client"
+  }
+
+  // Cast to any: support_tickets / support_ticket_messages are new tables not
+  // yet present in the generated Supabase TypeScript types.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const supabase = supabaseTyped as any
-  return { supabase, user, isAdmin, clientId }
+  return { supabase, user, isAdmin, clientId, senderName }
 }
 
 // ── Row mappers ───────────────────────────────────────────────
@@ -78,9 +95,9 @@ function mapTicket(row: any): SupportTicket {
 }
 
 async function resolveAttachmentUrls(
-  attachments: TicketAttachment[] | null,
+  attachments: TicketAttachment[],
 ): Promise<TicketAttachment[]> {
-  if (!attachments || attachments.length === 0) return []
+  if (attachments.length === 0) return []
   const admin = createServerAdminClient()
   return Promise.all(
     attachments.map(async (att) => {
@@ -93,16 +110,16 @@ async function resolveAttachmentUrls(
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function mapMessage(row: any, clientName: string): Promise<TicketMessage> {
-  const attachments = await resolveAttachmentUrls(
-    (row.attachments as TicketAttachment[] | null) ?? [],
-  )
+async function mapMessage(row: any): Promise<TicketMessage> {
+  const rawAttachments = Array.isArray(row.attachments) ? (row.attachments as TicketAttachment[]) : []
+  const attachments    = await resolveAttachmentUrls(rawAttachments)
   return {
     id:            row.id,
     ticketId:      row.ticket_id,
     senderUserId:  row.sender_user_id,
     senderRole:    row.sender_role as "admin" | "client",
-    senderName:    row.sender_role === "admin" ? "Support Team" : clientName,
+    // Use the stored sender_name; fall back to role label for legacy rows
+    senderName:    row.sender_name || (row.sender_role === "admin" ? "Support Team" : "Client"),
     message:       row.message,
     attachments,
     createdAt:     row.created_at,
@@ -121,10 +138,12 @@ export async function listTickets(archived = false): Promise<SupportTicket[]> {
       clients (company_name),
       message_count:support_ticket_messages(count)
     `)
-    .is("archived_at", archived ? null : null) // always fetch; filter below
     .order("updated_at", { ascending: false })
 
-  if (error) throw new Error(error.message)
+  if (error) {
+    console.error("[listTickets] error:", error.message)
+    throw new Error(error.message)
+  }
 
   return (data ?? [])
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -154,26 +173,31 @@ export async function getTicketWithMessages(
     .eq("id", ticketId)
     .single()
 
-  if (tErr) throw new Error(tErr.message)
+  if (tErr) {
+    console.error("[getTicketWithMessages] ticket fetch error:", tErr.message)
+    throw new Error(tErr.message)
+  }
 
   const { data: msgRows, error: mErr } = await supabase
     .from("support_ticket_messages")
-    .select("id, ticket_id, sender_user_id, sender_role, message, attachments, created_at")
+    .select("id, ticket_id, sender_user_id, sender_role, sender_name, message, attachments, created_at")
     .eq("ticket_id", ticketId)
     .order("created_at", { ascending: true })
 
-  if (mErr) throw new Error(mErr.message)
+  if (mErr) {
+    console.error("[getTicketWithMessages] messages fetch error:", mErr.message)
+    throw new Error(mErr.message)
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const t = tRow as any
-  const clientName = t.clients?.company_name ?? ""
   const ticket = {
     ...mapTicket(t),
     messageCount: Array.isArray(t.message_count) ? (t.message_count[0]?.count ?? 0) : 0,
   }
   const messages = await Promise.all(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (msgRows ?? []).map((m: any) => mapMessage(m, clientName)),
+    (msgRows ?? []).map((m: any) => mapMessage(m)),
   )
 
   return { ticket, messages }
@@ -192,7 +216,7 @@ type CreateTicketInput = {
 export async function createTicket(
   input: CreateTicketInput,
 ): Promise<{ ticket: SupportTicket; emailSent: boolean; emailError?: string }> {
-  const { supabase, user, isAdmin, clientId: jwtClientId } = await getAuthContext()
+  const { supabase, user, isAdmin, clientId: jwtClientId, senderName } = await getAuthContext()
 
   // Resolve which client this ticket belongs to
   const effectiveClientId = isAdmin ? input.clientId : (jwtClientId ?? input.clientId)
@@ -215,52 +239,62 @@ export async function createTicket(
     `)
     .single()
 
-  if (tErr) throw new Error(tErr.message)
+  if (tErr) {
+    console.error("[createTicket] ticket insert error:", tErr.message)
+    throw new Error(tErr.message)
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ticket: SupportTicket = { ...mapTicket(tRow as any), messageCount: 1 }
 
-  // Create the first message
-  const { error: mErr } = await supabase
+  // Create the first message.
+  // Use the service-role admin client so the insert is not subject to RLS
+  // quirks — the creator's identity is already verified above.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const adminDb = createServerAdminClient() as any
+  const { error: mErr } = await adminDb
     .from("support_ticket_messages")
     .insert({
       ticket_id:      ticket.id,
       sender_user_id: user.id,
       sender_role:    isAdmin ? "admin" : "client",
+      sender_name:    senderName,
       message:        input.message.trim(),
       attachments:    input.attachments.length > 0 ? input.attachments : [],
     })
 
-  if (mErr) throw new Error(mErr.message)
+  if (mErr) {
+    console.error("[createTicket] message insert error:", mErr.message)
+    throw new Error(mErr.message)
+  }
 
-  // Send email notification to admin
+  // Send email notification to admin (skip when admin creates on behalf)
   let emailSent = false
   let emailError: string | undefined
 
-  const admin = createServerAdminClient()
-  const { data: settings } = await admin
-    .from("company_settings")
-    .select("email, company_name")
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle()
+  if (!isAdmin) {
+    const admin = createServerAdminClient()
+    const { data: settings } = await admin
+      .from("company_settings")
+      .select("email, company_name")
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()
 
-  const adminEmail = (settings as Record<string, unknown> | null)?.email as string | undefined
-  if (adminEmail && !isAdmin) {
-    const result = await sendSupportEmail({
-      to: adminEmail,
-      subject: `New Support Ticket: ${ticket.ticketNumber} – ${ticket.subject}`,
-      html: emailHtml(
-        "New support ticket submitted",
-        input.message,
-        ticket.ticketNumber,
-        ticket.subject,
-      ),
-    })
-    emailSent  = result.sent
-    emailError = result.error
+    const adminEmail = (settings as Record<string, unknown> | null)?.email as string | undefined
+    if (adminEmail) {
+      const result = await sendSupportEmail({
+        to: adminEmail,
+        subject: `New Support Ticket: ${ticket.ticketNumber} – ${ticket.subject}`,
+        html: emailHtml("New support ticket submitted", input.message, ticket.ticketNumber, ticket.subject),
+      })
+      emailSent  = result.sent
+      emailError = result.error
+    } else {
+      emailSent = true
+    }
   } else {
-    emailSent = true // admin creating on behalf → skip notification
+    emailSent = true
   }
 
   return { ticket, emailSent, emailError }
@@ -278,43 +312,57 @@ type ReplyInput = {
 export async function replyToTicket(
   input: ReplyInput,
 ): Promise<{ message: TicketMessage; emailSent: boolean; emailError?: string }> {
-  const { supabase, user, isAdmin } = await getAuthContext()
+  const { supabase, user, isAdmin, senderName } = await getAuthContext()
 
-  // Verify access + get ticket details
+  // Verify access + get ticket details.
+  // Note: select only plain columns from the joined table — no alias tricks.
   const { data: tRow, error: tErr } = await supabase
     .from("support_tickets")
-    .select("id, ticket_number, subject, client_id, status, clients(company_name, email:clients_email)")
+    .select("id, ticket_number, subject, client_id, status, clients(company_name, email)")
     .eq("id", input.ticketId)
     .single()
 
-  if (tErr || !tRow) throw new Error("Ticket not found or access denied.")
+  if (tErr || !tRow) {
+    const msg = tErr?.message ?? "Ticket not found or access denied."
+    console.error("[replyToTicket] ticket fetch error:", msg)
+    throw new Error(msg)
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const t = tRow as any
 
-  // Insert message
-  const { data: mRow, error: mErr } = await supabase
+  // Insert message using the service-role admin client so the insert succeeds
+  // regardless of how RLS evaluates for the admin session.
+  // The caller's identity has already been verified via getAuthContext().
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const adminDb = createServerAdminClient() as any
+  const { data: mRow, error: mErr } = await adminDb
     .from("support_ticket_messages")
     .insert({
       ticket_id:      input.ticketId,
       sender_user_id: user.id,
       sender_role:    isAdmin ? "admin" : "client",
+      sender_name:    senderName,
       message:        input.message.trim(),
       attachments:    input.attachments.length > 0 ? input.attachments : [],
     })
-    .select("id, ticket_id, sender_user_id, sender_role, message, attachments, created_at")
+    .select("id, ticket_id, sender_user_id, sender_role, sender_name, message, attachments, created_at")
     .single()
 
-  if (mErr) throw new Error(mErr.message)
+  if (mErr) {
+    console.error("[replyToTicket] message insert error:", mErr.message)
+    throw new Error(mErr.message)
+  }
 
-  // Update ticket status
+  // Update ticket status via user client (RLS allows ticket participants to update)
   const nextStatus: TicketStatus = input.newStatus ?? (isAdmin ? "Waiting for Client" : "Waiting for Admin")
-  await supabase
+  const { error: sErr } = await supabase
     .from("support_tickets")
     .update({ status: nextStatus })
     .eq("id", input.ticketId)
+  if (sErr) console.error("[replyToTicket] status update error:", sErr.message)
 
-  const message = await mapMessage(mRow, t.clients?.company_name ?? "")
+  const message = await mapMessage(mRow)
 
   // Email notification
   let emailSent = false
@@ -322,12 +370,12 @@ export async function replyToTicket(
 
   if (isAdmin) {
     // Notify client
-    const adminRows = await createServerAdminClient()
+    const { data: clientRow } = await createServerAdminClient()
       .from("clients")
       .select("email")
       .eq("id", t.client_id)
       .maybeSingle()
-    const clientEmail = (adminRows.data as Record<string, unknown> | null)?.email as string | undefined
+    const clientEmail = (clientRow as Record<string, unknown> | null)?.email as string | undefined
     if (clientEmail) {
       const result = await sendSupportEmail({
         to: clientEmail,
@@ -373,7 +421,10 @@ export async function updateTicketStatus(id: string, status: TicketStatus): Prom
     .from("support_tickets")
     .update({ status })
     .eq("id", id)
-  if (error) throw new Error(error.message)
+  if (error) {
+    console.error("[updateTicketStatus] error:", error.message)
+    throw new Error(error.message)
+  }
 }
 
 // ── archiveTicket ─────────────────────────────────────────────
@@ -384,7 +435,10 @@ export async function archiveTicket(id: string): Promise<void> {
     .from("support_tickets")
     .update({ archived_at: new Date().toISOString(), status: "Archived" })
     .eq("id", id)
-  if (error) throw new Error(error.message)
+  if (error) {
+    console.error("[archiveTicket] error:", error.message)
+    throw new Error(error.message)
+  }
 }
 
 // ── restoreTicket ─────────────────────────────────────────────
@@ -396,5 +450,8 @@ export async function restoreTicket(id: string): Promise<void> {
     .from("support_tickets")
     .update({ archived_at: null, status: "Open" })
     .eq("id", id)
-  if (error) throw new Error(error.message)
+  if (error) {
+    console.error("[restoreTicket] error:", error.message)
+    throw new Error(error.message)
+  }
 }
