@@ -38,7 +38,7 @@ create table support_ticket_messages (
   sender_user_id uuid        not null references auth.users(id),
   sender_role    text        not null check (sender_role in ('admin', 'client')),
   message        text        not null,
-  attachments    jsonb,
+  attachments    jsonb        not null default '[]'::jsonb,
   created_at     timestamptz not null default now()
 );
 

@@ -228,7 +228,7 @@ export async function createTicket(
       sender_user_id: user.id,
       sender_role:    isAdmin ? "admin" : "client",
       message:        input.message.trim(),
-      attachments:    input.attachments.length > 0 ? input.attachments : null,
+      attachments:    input.attachments.length > 0 ? input.attachments : [],
     })
 
   if (mErr) throw new Error(mErr.message)
@@ -300,7 +300,7 @@ export async function replyToTicket(
       sender_user_id: user.id,
       sender_role:    isAdmin ? "admin" : "client",
       message:        input.message.trim(),
-      attachments:    input.attachments.length > 0 ? input.attachments : null,
+      attachments:    input.attachments.length > 0 ? input.attachments : [],
     })
     .select("id, ticket_id, sender_user_id, sender_role, message, attachments, created_at")
     .single()
