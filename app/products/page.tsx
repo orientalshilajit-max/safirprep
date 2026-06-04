@@ -148,10 +148,6 @@ export default function ProductsPage() {
         }
       }
 
-      // Image status
-      if (activeFilters.imageStatus === "has-image" && !p.image)  return false
-      if (activeFilters.imageStatus === "no-image"  && !!p.image) return false
-
       return true
     })
   }, [products, search, statusFilter, activeFilters])
