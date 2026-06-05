@@ -60,7 +60,6 @@ type DbFileRow = {
   category:         string
   file_name:        string
   file_url:         string
-  file_path:        string | null
   thumbnail_url:    string | null
   file_type:        string | null
   file_size_bytes:  number | null
@@ -123,7 +122,7 @@ function mapRow(row: DbFileRow): FileDoc {
 
 const FILE_SELECT = `
   id, client_id, product_id, shipment_id, request_id, invoice_id,
-  category, file_name, file_url, file_path, thumbnail_url,
+  category, file_name, file_url, thumbnail_url,
   file_type, file_size_bytes, uploaded_by, uploaded_by_name, created_at,
   clients (company_name),
   products (name),
@@ -307,7 +306,7 @@ export async function deleteFile(id: string): Promise<DeleteFileResult> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { data: row, error: fetchErr } = await (admin as any)
     .from("files")
-    .select("id, client_id, product_id, file_url, file_path, uploaded_by")
+    .select("id, client_id, product_id, file_url, uploaded_by")
     .eq("id", id)
     .maybeSingle()
 
@@ -319,9 +318,8 @@ export async function deleteFile(id: string): Promise<DeleteFileResult> {
     return { success: false, error: "You can only delete your own files." }
   }
 
-  // Resolve storage path: prefer explicit file_path column; fall back to parsing URL
+  // Resolve storage path from the public URL (works for all existing files)
   const storagePath: string | null =
-    (row.file_path as string | null) ||
     extractStoragePath(row.file_url as string, STORAGE_BUCKET)
 
   if (!storagePath) {
