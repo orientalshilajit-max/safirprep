@@ -36,7 +36,14 @@ export default function NotificationsPage() {
     finally { setLoading(false) }
   }, [isMockMode])
 
-  useEffect(() => { void load() }, [load])
+  useEffect(() => {
+    if (isMockMode) return
+    import("@/app/notifications/actions")
+      .then(({ listNotifications }) => listNotifications(100))
+      .then(setNotifs)
+      .catch(() => {})
+      .finally(() => setLoading(false))
+  }, [isMockMode])
 
   async function handleRead(n: AppNotification) {
     if (n.readAt) {

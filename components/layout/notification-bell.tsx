@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useEffect, useRef } from "react"
 import { useRouter } from "next/navigation"
 import { Bell, CheckCheck, ExternalLink } from "lucide-react"
 import type { AppNotification } from "@/app/notifications/actions"
@@ -27,23 +27,20 @@ export function NotificationBell({ isMockMode }: Props) {
   const [markingAll,  setMarkingAll]  = useState(false)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  // Load unread count
-  const loadCount = useCallback(async () => {
-    if (isMockMode) return
-    try {
-      const { getUnreadCount } = await import("@/app/notifications/actions")
-      const count = await getUnreadCount()
-      setUnread(count)
-    } catch { /* silent */ }
-  }, [isMockMode])
-
   // Initial + polling every 60 s
   useEffect(() => {
-    void loadCount()
     if (isMockMode) return
-    const id = setInterval(() => void loadCount(), 60_000)
+
+    const tick = () =>
+      import("@/app/notifications/actions")
+        .then(({ getUnreadCount }) => getUnreadCount())
+        .then(setUnread)
+        .catch(() => {})
+
+    tick()
+    const id = setInterval(tick, 60_000)
     return () => clearInterval(id)
-  }, [loadCount, isMockMode])
+  }, [isMockMode])
 
   // Close on outside click
   useEffect(() => {
