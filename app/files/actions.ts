@@ -60,6 +60,7 @@ type DbFileRow = {
   category:         string
   file_name:        string
   file_url:         string
+  file_path:        string | null
   thumbnail_url:    string | null
   file_type:        string | null
   file_size_bytes:  number | null
@@ -70,6 +71,14 @@ type DbFileRow = {
   products:              { name: string }         | null
   incoming_shipments:    { shipment_number: string } | null
   service_requests:      { request_number: string }  | null
+}
+
+// Extract bucket-relative path from a Supabase public storage URL
+function extractStoragePath(fileUrl: string, bucket: string): string | null {
+  const marker = `/storage/v1/object/public/${bucket}/`
+  const idx    = fileUrl.indexOf(marker)
+  if (idx !== -1) return decodeURIComponent(fileUrl.slice(idx + marker.length))
+  return null
 }
 
 function mapRow(row: DbFileRow): FileDoc {
@@ -114,7 +123,7 @@ function mapRow(row: DbFileRow): FileDoc {
 
 const FILE_SELECT = `
   id, client_id, product_id, shipment_id, request_id, invoice_id,
-  category, file_name, file_url, thumbnail_url,
+  category, file_name, file_url, file_path, thumbnail_url,
   file_type, file_size_bytes, uploaded_by, uploaded_by_name, created_at,
   clients (company_name),
   products (name),
@@ -213,21 +222,25 @@ export async function uploadFile(formData: FormData): Promise<FileDoc> {
   // Insert file record — user client respects DB RLS.
   // uploaded_by (uuid) = authenticated user's auth.users.id
   // uploaded_by_name (text) = human-readable display name passed from the client
+  // file_path is a new column not yet in generated Supabase types — assign via cast
+  const insertPayload = {
+    client_id:        clientId,
+    product_id:       productId,
+    shipment_id:      shipmentId,
+    request_id:       requestId,
+    category:         (CATEGORY_TO_DB[category] ?? "other") as "agreements" | "labels" | "shipment_docs" | "product_docs" | "invoices" | "other",
+    file_name:        file.name,
+    file_url:         publicUrl,
+    file_type:        file.type || null,
+    file_size_bytes:  file.size,
+    uploaded_by:      user.id,
+    uploaded_by_name: uploadedByName || null,
+  };
+  (insertPayload as Record<string, unknown>).file_path = storagePath
+
   const { data: record, error: dbErr } = await supabase
     .from("files")
-    .insert({
-      client_id:        clientId,
-      product_id:       productId,
-      shipment_id:      shipmentId,
-      request_id:       requestId,
-      category:         (CATEGORY_TO_DB[category] ?? "other") as "agreements" | "labels" | "shipment_docs" | "product_docs" | "invoices" | "other",
-      file_name:        file.name,
-      file_url:         publicUrl,
-      file_type:        file.type || null,
-      file_size_bytes:  file.size,
-      uploaded_by:      user.id,
-      uploaded_by_name: uploadedByName || null,
-    })
+    .insert(insertPayload)
     .select("id")
     .single()
   if (dbErr) {
@@ -271,4 +284,88 @@ export async function uploadFile(formData: FormData): Promise<FileDoc> {
   }
 
   return result
+}
+
+// ── deleteFile ────────────────────────────────────────────────
+// Deletes the storage object and the DB record.
+// Returns success or a typed error so the caller can show the right message.
+
+export type DeleteFileResult =
+  | { success: true }
+  | { success: false; error: string; partiallyDeleted?: boolean }
+
+export async function deleteFile(id: string): Promise<DeleteFileResult> {
+  const supabase = await createSupabaseServerClient()
+  const admin    = createServerAdminClient()
+
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { success: false, error: "Unauthorized." }
+  const isAdmin  = user.app_metadata?.role === "admin"
+  const clientId = user.app_metadata?.client_id as string | undefined
+
+  // Fetch via admin client so we can always read the record regardless of RLS
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: row, error: fetchErr } = await (admin as any)
+    .from("files")
+    .select("id, client_id, product_id, file_url, file_path, uploaded_by")
+    .eq("id", id)
+    .maybeSingle()
+
+  if (fetchErr) return { success: false, error: fetchErr.message }
+  if (!row)     return { success: false, error: "File not found." }
+
+  // Permission: client can only delete files belonging to their own client account
+  if (!isAdmin && row.client_id !== clientId) {
+    return { success: false, error: "You can only delete your own files." }
+  }
+
+  // Resolve storage path: prefer explicit file_path column; fall back to parsing URL
+  const storagePath: string | null =
+    (row.file_path as string | null) ||
+    extractStoragePath(row.file_url as string, STORAGE_BUCKET)
+
+  if (!storagePath) {
+    return { success: false, error: "Cannot determine storage path for this file." }
+  }
+
+  // 1. Delete from storage (service-role bypasses bucket RLS)
+  const { error: storageErr } = await admin.storage
+    .from(STORAGE_BUCKET)
+    .remove([storagePath])
+
+  if (storageErr) {
+    console.error("[deleteFile] storage removal failed:", storageErr.message)
+    return { success: false, error: `Storage deletion failed: ${storageErr.message}` }
+  }
+
+  // 2. If linked to a product and the URL matches its image_url, clear the image
+  if (row.product_id) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data: product } = await (admin as any)
+      .from("products")
+      .select("image_url")
+      .eq("id", row.product_id)
+      .maybeSingle()
+    if (product && (product as { image_url: string }).image_url === row.file_url) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (admin as any)
+        .from("products")
+        .update({ image_url: null })
+        .eq("id", row.product_id)
+    }
+  }
+
+  // 3. Delete the DB record
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error: dbErr } = await (admin as any).from("files").delete().eq("id", id)
+  if (dbErr) {
+    console.error("[deleteFile] DB delete failed after storage deletion:", dbErr.message)
+    return {
+      success:          false,
+      error:            "File removed from storage, but the database record could not be deleted.",
+      partiallyDeleted: true,
+    }
+  }
+
+  return { success: true }
 }

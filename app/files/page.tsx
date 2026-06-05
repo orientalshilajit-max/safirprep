@@ -5,9 +5,11 @@ import {
   Search,
   Plus,
   Download,
+  Trash2,
   FileText,
   File,
   Archive,
+  AlertTriangle,
   FolderOpen,
   Tag,
   Truck,
@@ -31,7 +33,7 @@ import { IconButton } from "@/components/ui/icon-button"
 import { FilePreviewModal } from "@/components/files/file-preview-modal"
 import { UploadModal } from "@/components/files/upload-modal"
 import { listProductClients } from "@/app/products/actions"
-import { listFiles } from "@/app/files/actions"
+import { listFiles, deleteFile } from "@/app/files/actions"
 import type { FileDoc, FileCategory, DataTableColumn } from "@/lib/types"
 import { FILE_CATEGORIES } from "@/lib/types"
 
@@ -130,6 +132,9 @@ export default function FilesPage() {
   const [page,            setPage]            = useState(1)
   const [previewFile,     setPreviewFile]     = useState<FileDoc | null>(null)
   const [uploadOpen,      setUploadOpen]      = useState(false)
+  const [deleteTarget,    setDeleteTarget]    = useState<FileDoc | null>(null)
+  const [deleting,        setDeleting]        = useState(false)
+  const [deleteError,     setDeleteError]     = useState("")
 
   // Client list for admin UploadModal (Supabase mode only)
   const [pageClients, setPageClients] = useState<{ id: string; name: string }[]>([])
@@ -193,6 +198,25 @@ export default function FilesPage() {
     setPage(1)
   }
 
+  /* ── Delete ──────────────────────────────────────────── */
+  async function handleDeleteConfirm() {
+    if (!deleteTarget) return
+    setDeleting(true)
+    setDeleteError("")
+    const result = await deleteFile(deleteTarget.id)
+    if (result.success) {
+      setFiles((prev) => prev.filter((f) => f.id !== deleteTarget.id))
+      setDeleteTarget(null)
+    } else {
+      setDeleteError(result.error)
+      if (result.partiallyDeleted) {
+        // Record is likely orphaned in DB; remove from local list anyway
+        setFiles((prev) => prev.filter((f) => f.id !== deleteTarget.id))
+      }
+    }
+    setDeleting(false)
+  }
+
   /* ── Upload modal props ───────────────────────────────── */
   // In mock mode, use the hardcoded mock client.
   // In Supabase mode, use the authenticated user's clientId (clients use theirs;
@@ -253,18 +277,26 @@ export default function FilesPage() {
     {
       id: "actions",
       header: "Action",
-      headerClassName: "text-right w-16",
-      className: "text-right w-16",
+      headerClassName: "text-right w-24",
+      className: "text-right w-24",
       cell: (row) => (
-        <div className="flex items-center justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
           <IconButton
             variant="primary"
             title="Download"
             onClick={() => handleDownload(row)}
-            // Disable if no URL (mock mode file with no real URL)
           >
             <Download className="size-3.5" />
           </IconButton>
+          {!isMockMode && (
+            <IconButton
+              variant="danger"
+              title="Delete file"
+              onClick={() => { setDeleteError(""); setDeleteTarget(row) }}
+            >
+              <Trash2 className="size-3.5" />
+            </IconButton>
+          )}
         </div>
       ),
     },
@@ -408,9 +440,16 @@ export default function FilesPage() {
                   )}
                   <p className="font-mono text-[11px] text-gray-400 truncate">{f.relatedTo}</p>
                 </div>
-                <IconButton variant="primary" title="Download" onClick={() => handleDownload(f)}>
-                  <Download className="size-3.5" />
-                </IconButton>
+                <div className="flex items-center gap-1">
+                  <IconButton variant="primary" title="Download" onClick={() => handleDownload(f)}>
+                    <Download className="size-3.5" />
+                  </IconButton>
+                  {!isMockMode && (
+                    <IconButton variant="danger" title="Delete file" onClick={() => { setDeleteError(""); setDeleteTarget(f) }}>
+                      <Trash2 className="size-3.5" />
+                    </IconButton>
+                  )}
+                </div>
               </div>
             )}
             emptyState={
@@ -494,6 +533,52 @@ export default function FilesPage() {
           </div>
         </div>
       </div>
+
+      {/* Delete confirmation modal */}
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => { if (!deleting) { setDeleteTarget(null); setDeleteError("") } }} />
+          <div className="relative bg-white rounded-xl shadow-xl w-full max-w-sm p-6">
+            <div className="flex gap-4 mb-4">
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-red-50">
+                <AlertTriangle className="size-5 text-red-600" />
+              </div>
+              <div>
+                <h2 className="text-[15px] font-semibold text-gray-900">Delete file?</h2>
+                <p className="text-[13px] text-gray-500 mt-1 leading-snug">
+                  This will permanently delete <strong className="text-gray-700">{deleteTarget.name}</strong> from storage. This action cannot be undone.
+                </p>
+              </div>
+            </div>
+
+            {deleteError && (
+              <p className={`text-[12px] rounded-lg px-3 py-2 mb-4 ${
+                deleteError.includes("storage") ? "bg-red-50 text-red-700" : "bg-amber-50 text-amber-700"
+              }`}>
+                {deleteError}
+              </p>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => { setDeleteTarget(null); setDeleteError("") }}
+                disabled={deleting}
+                className="px-4 py-2 text-[13px] font-medium text-gray-600 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDeleteConfirm}
+                disabled={deleting}
+                className="flex items-center gap-1.5 px-4 py-2 text-[13px] font-semibold text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-60"
+              >
+                {deleting && <span className="size-3.5 rounded-full border-2 border-white border-t-transparent animate-spin" />}
+                Delete Permanently
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Preview modal */}
       <FilePreviewModal
