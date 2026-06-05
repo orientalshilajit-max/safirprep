@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from "@/lib/supabase-server"
 import { createServerAdminClient }     from "@/lib/supabase"
 import type { ServiceRequest, RequestService, ServiceStatus, ServiceType, ServiceDetails } from "@/lib/types"
 import { createNotification } from "@/lib/notifications-server"
+import { sendTelegramNotification } from "@/lib/telegram"
 
 // ── Status mapping ────────────────────────────────────────────
 
@@ -344,6 +345,9 @@ export async function createRequest(input: CreateInput): Promise<ServiceRequest>
       entityId:      result.id,
       linkUrl:       "/service-requests",
     })
+    void sendTelegramNotification(
+      `New Service Request\nClient: ${result.clientName}\nRequest: ${result.requestNumber}\nOpen: https://app.safir-logistics.com/service-requests`
+    )
   }
 
   return result

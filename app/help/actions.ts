@@ -6,6 +6,7 @@ import type {
   SupportTicket, TicketMessage, TicketCategory, TicketStatus, TicketAttachment,
 } from "@/lib/types"
 import { createNotification } from "@/lib/notifications-server"
+import { sendTelegramNotification } from "@/lib/telegram"
 
 // ── Email helper (Resend – graceful fallback) ─────────────────
 
@@ -318,6 +319,9 @@ export async function createTicket(
       entityId:      ticket.id,
       linkUrl:       "/help",
     })
+    void sendTelegramNotification(
+      `New Support Ticket\nClient: ${ticket.clientName}\nTicket: ${ticket.ticketNumber}\nSubject: ${ticket.subject}\nOpen: https://app.safir-logistics.com/help`
+    )
   }
 
   return { ticket, emailSent, emailError }

@@ -5,6 +5,7 @@ import { createSupabaseServerClient } from "@/lib/supabase-server"
 import { createServerAdminClient }     from "@/lib/supabase"
 import type { Shipment, ShipmentStatus } from "@/lib/types"
 import { createNotification } from "@/lib/notifications-server"
+import { sendTelegramNotification } from "@/lib/telegram"
 
 // ── Status mapping ────────────────────────────────────────────
 
@@ -269,6 +270,9 @@ export async function createShipment(input: CreateInput): Promise<Shipment> {
       entityId:      result.id,
       linkUrl:       "/shipments",
     })
+    void sendTelegramNotification(
+      `New Incoming Shipment\nClient: ${result.clientName}\nShipment: ${result.shipmentNumber}\nOpen: https://app.safir-logistics.com/shipments`
+    )
   }
 
   return result

@@ -4,6 +4,7 @@ import { createSupabaseServerClient } from "@/lib/supabase-server"
 import { createServerAdminClient } from "@/lib/supabase"
 import type { Product } from "@/lib/types"
 import { createNotification } from "@/lib/notifications-server"
+import { sendTelegramNotification } from "@/lib/telegram"
 
 const PRODUCT_IMAGE_BUCKET = "product-images"
 const ALLOWED_IMAGE_TYPES  = ["image/jpeg", "image/jpg", "image/png", "image/webp"]
@@ -226,6 +227,9 @@ export async function createProduct(input: ProductFields): Promise<Product> {
       entityId:      result.id,
       linkUrl:       "/products",
     })
+    void sendTelegramNotification(
+      `New Product Added\nClient: ${result.clientName}\nProduct: ${result.name}\nOpen: https://app.safir-logistics.com/products`
+    )
   }
 
   return result
