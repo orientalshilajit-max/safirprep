@@ -703,6 +703,18 @@ export async function deletePricingRule(id: string): Promise<void> {
   if (error) throw new Error(error.message)
 }
 
+export async function fetchServiceTypePricingRules(serviceTypeId: string): Promise<PricingRule[]> {
+  await requireAdmin()
+  const admin = createServerAdminClient()
+  const { data, error } = await admin
+    .from("service_pricing_rules")
+    .select("id, service_type_id, min_qty, max_qty, price_per_unit, label, sort_order")
+    .eq("service_type_id", serviceTypeId)
+    .order("min_qty", { ascending: true })
+  if (error) throw new Error(error.message)
+  return (data ?? []).map(mapRuleRow)
+}
+
 // ── lookupPricingRule ─────────────────────────────────────────
 // Any authenticated user can call this to calculate estimated price.
 

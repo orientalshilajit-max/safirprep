@@ -5,7 +5,7 @@ import {
   Building2, Truck, Wrench, FileText, Users,
   ChevronUp, ChevronDown, ChevronRight, Pencil, Trash2, Plus, Check, X,
   ImagePlus, GripVertical, Settings, Mail,
-  KeyRound, Eye, EyeOff, AlertTriangle, AlertCircle, Tag,
+  KeyRound, Eye, EyeOff, AlertTriangle, AlertCircle, Tag, CheckCircle2,
 } from "lucide-react"
 import { useRole, useIsMockMode, useAuthUser } from "@/components/layout/app-shell"
 import { AdminUsersSection } from "./admin-users"
@@ -27,6 +27,7 @@ import {
   reorderServiceTypes,
   upsertPricingRule,
   deletePricingRule,
+  fetchServiceTypePricingRules,
   saveInvoiceSettings,
   saveUserSettings,
   type SettingsCarrier,
@@ -142,6 +143,16 @@ function InlineError({ msg }: { msg: string | null }) {
     <div className="flex items-start gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2.5">
       <AlertCircle className="size-3.5 text-red-500 mt-0.5 shrink-0" />
       <p className="text-[12px] text-red-600">{msg}</p>
+    </div>
+  )
+}
+
+function InlineSuccess({ show }: { show: boolean }) {
+  if (!show) return null
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-green-100 bg-green-50 px-3 py-2.5">
+      <CheckCircle2 className="size-3.5 text-green-500 mt-0.5 shrink-0" />
+      <p className="text-[12px] text-green-700">Service updated successfully.</p>
     </div>
   )
 }
@@ -500,6 +511,12 @@ function PricingRuleSubList({
   const [saving,      setSaving]      = useState<string | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<PricingRule | null>(null)
   const [deleting,    setDeleting]    = useState(false)
+  const [success,     setSuccess]     = useState(false)
+
+  function flashSuccess() {
+    setSuccess(true)
+    setTimeout(() => setSuccess(false), 2500)
+  }
 
   function startEdit(rule: PricingRule) {
     setEditingId(rule.id)
@@ -528,12 +545,14 @@ function PricingRuleSubList({
     }
     setSaving(rule.id)
     try {
-      const updated = await upsertPricingRule({
+      await upsertPricingRule({
         id: rule.id, serviceTypeId, minQty, maxQty, pricePerUnit,
         label: editState.label.trim() || null, sortOrder: rule.sortOrder,
       })
-      setRules((prev) => prev.map((r) => r.id === rule.id ? updated : r).sort((a, b) => a.minQty - b.minQty))
+      const fresh = await fetchServiceTypePricingRules(serviceTypeId)
+      setRules(fresh)
       setEditingId(null)
+      flashSuccess()
     } catch (err) {
       setRuleError(err instanceof Error ? err.message : "Failed to save rule.")
     } finally {
@@ -558,12 +577,14 @@ function PricingRuleSubList({
     }
     setSaving("new")
     try {
-      const created = await upsertPricingRule({
+      await upsertPricingRule({
         serviceTypeId, minQty, maxQty, pricePerUnit,
         label: addState.label.trim() || null, sortOrder: minQty,
       })
-      setRules((prev) => [...prev, created].sort((a, b) => a.minQty - b.minQty))
+      const fresh = await fetchServiceTypePricingRules(serviceTypeId)
+      setRules(fresh)
       setAdding(false); setAddState(emptyRuleState())
+      flashSuccess()
     } catch (err) {
       setRuleError(err instanceof Error ? err.message : "Failed to add rule.")
     } finally {
@@ -581,10 +602,12 @@ function PricingRuleSubList({
     setDeleting(true)
     try {
       await deletePricingRule(deleteTarget.id)
-      setRules((prev) => prev.filter((r) => r.id !== deleteTarget.id))
+      const fresh = await fetchServiceTypePricingRules(serviceTypeId)
+      setRules(fresh)
       setDeleteTarget(null)
-    } catch {
-      // silently keep rule on delete failure
+      flashSuccess()
+    } catch (err) {
+      setRuleError(err instanceof Error ? err.message : "Failed to delete rule.")
     } finally {
       setDeleting(false)
     }
@@ -598,6 +621,12 @@ function PricingRuleSubList({
         <div className="flex items-start gap-1.5 rounded-lg bg-red-50 border border-red-100 px-2.5 py-1.5">
           <AlertCircle className="size-3 text-red-500 mt-0.5 shrink-0" />
           <p className="text-[11px] text-red-600">{ruleError}</p>
+        </div>
+      )}
+      {success && (
+        <div className="flex items-start gap-1.5 rounded-lg bg-green-50 border border-green-100 px-2.5 py-1.5">
+          <CheckCircle2 className="size-3 text-green-500 mt-0.5 shrink-0" />
+          <p className="text-[11px] text-green-700">Service updated successfully.</p>
         </div>
       )}
 
@@ -686,10 +715,17 @@ function ServiceList({
   const [expandedId,   setExpandedId]  = useState<string | null>(null)
   const [saving,       setSaving]      = useState<string | null>(null)
   const [error,        setError]       = useState<string | null>(null)
+  const [success,      setSuccess]     = useState(false)
   const [deleteTarget, setDeleteTarget] = useState<SettingsServiceType | null>(null)
   const [deleteMsg,    setDeleteMsg]   = useState("")
   const [deleting,     setDeleting]    = useState(false)
   const [checkingId,   setCheckingId]  = useState<string | null>(null)
+
+  function flashSuccess() {
+    setError(null)
+    setSuccess(true)
+    setTimeout(() => setSuccess(false), 2500)
+  }
 
   function startEdit(item: SettingsServiceType) {
     setEditingId(item.id)
@@ -716,6 +752,7 @@ function ServiceList({
       })
       setItems((prev) => prev.map((i) => i.id === item.id ? { ...updated, pricingRules: item.pricingRules } : i))
       setEditingId(null)
+      flashSuccess()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save service.")
     } finally {
@@ -756,6 +793,7 @@ function ServiceList({
       })
       setItems((prev) => [...prev, { ...created, pricingRules: [] }])
       setAdding(false); setAddName(""); setAddVisible(true)
+      flashSuccess()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to add service.")
     } finally {
@@ -899,6 +937,7 @@ function ServiceList({
   return (
     <div className="space-y-1">
       <InlineError msg={error} />
+      <InlineSuccess show={success} />
 
       {items.map((item, idx) => (
         <div key={item.id}>{renderServiceRow(item, idx)}</div>
