@@ -148,6 +148,14 @@ export type RequestService = {
   unitPrice: number
   totalPrice: number
   notes: string
+  fbmCalculation?: {
+    totalUnits: number
+    baseOrderFee: number
+    additionalItemQuantity: number
+    additionalItemFee: number
+    additionalItemTotal: number
+    serviceTotal: number
+  }
 }
 
 export type ServiceRequest = {

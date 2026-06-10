@@ -84,6 +84,12 @@ type DbServiceRow = {
   quantity: number
   unit_price: number
   total_price: number
+  total_units: number | null
+  base_order_fee: number | null
+  additional_item_quantity: number | null
+  additional_item_fee: number | null
+  additional_item_total: number | null
+  service_total: number | null
   notes: string | null
 }
 
@@ -114,15 +120,35 @@ function mapRow(row: DbRow): ServiceRequest {
   const sd       = row.service_details ?? {}
   const dbSvcs   = row.service_request_services ?? []
 
-  const services: RequestService[] = dbSvcs.map((s) => ({
-    id:            s.id,
-    serviceTypeId: s.service_type_id,
-    serviceName:   s.service_name_snapshot || "Deleted service",
-    quantity:      s.quantity,
-    unitPrice:     s.unit_price,
-    totalPrice:    s.total_price,
-    notes:         s.notes ?? "",
-  }))
+  const services: RequestService[] = dbSvcs.map((s) => {
+    const serviceName = s.service_name_snapshot || "Deleted service"
+    const totalUnits = s.total_units ?? s.quantity ?? 1
+    const baseOrderFee = s.base_order_fee ?? s.unit_price ?? 0
+    const additionalItemQuantity = s.additional_item_quantity ?? (serviceName === "FBM Fulfillment" ? Math.max(totalUnits - 1, 0) : 0)
+    const additionalItemFee = s.additional_item_fee ?? 0.50
+    const additionalItemTotal = s.additional_item_total ?? parseFloat((additionalItemQuantity * additionalItemFee).toFixed(2))
+    const serviceTotal = s.service_total ?? (serviceName === "FBM Fulfillment" ? baseOrderFee + additionalItemTotal : s.total_price)
+
+    return {
+      id:            s.id,
+      serviceTypeId: s.service_type_id,
+      serviceName,
+      quantity:      s.quantity,
+      unitPrice:     s.unit_price,
+      totalPrice:    s.total_price,
+      notes:         s.notes ?? "",
+      fbmCalculation: serviceName === "FBM Fulfillment"
+        ? {
+            totalUnits,
+            baseOrderFee,
+            additionalItemQuantity,
+            additionalItemFee,
+            additionalItemTotal,
+            serviceTotal,
+          }
+        : undefined,
+    }
+  })
 
   const primaryService = (services[0]?.serviceName ?? row.service_type) as ServiceType
 
@@ -161,7 +187,11 @@ const REQUEST_SELECT = `
   inventory_deducted, service_details, created_at, deleted_at,
   clients (company_name),
   service_request_items (id, product_id, quantity, notes, products (name, sku)),
-  service_request_services (id, service_type_id, service_name_snapshot, quantity, unit_price, total_price, notes)
+  service_request_services (
+    id, service_type_id, service_name_snapshot, quantity, unit_price, total_price,
+    total_units, base_order_fee, additional_item_quantity, additional_item_fee,
+    additional_item_total, service_total, notes
+  )
 ` as const
 
 // ── Inventory helper ──────────────────────────────────────────
@@ -212,6 +242,23 @@ async function lookupUnitPrice(
     return match?.price_per_unit ?? 0
   } catch {
     return 0
+  }
+}
+
+function calculateFbmSnapshot(baseOrderFee: number, totalUnits: number) {
+  const safeUnits = Math.max(totalUnits, 1)
+  const additionalItemQuantity = Math.max(safeUnits - 1, 0)
+  const additionalItemFee = 0.50
+  const additionalItemTotal = parseFloat((additionalItemQuantity * additionalItemFee).toFixed(2))
+  const serviceTotal = parseFloat((baseOrderFee + additionalItemTotal).toFixed(2))
+
+  return {
+    totalUnits: safeUnits,
+    baseOrderFee,
+    additionalItemQuantity,
+    additionalItemFee,
+    additionalItemTotal,
+    serviceTotal,
   }
 }
 
@@ -309,15 +356,29 @@ export async function createRequest(input: CreateInput): Promise<ServiceRequest>
 
   // Insert service rows with price snapshots
   for (const svc of validServices) {
-    const unitPrice  = await lookupUnitPrice(svc.serviceTypeId, svc.serviceName, input.quantity)
-    const totalPrice = parseFloat((unitPrice * input.quantity).toFixed(2))
+    const isFbm = svc.serviceName === "FBM Fulfillment"
+    const unitPrice  = await lookupUnitPrice(svc.serviceTypeId, svc.serviceName, isFbm ? 1 : input.quantity)
+    const fbmSnapshot = isFbm ? calculateFbmSnapshot(unitPrice, input.quantity) : null
+    const totalPrice = fbmSnapshot?.serviceTotal ?? parseFloat((unitPrice * input.quantity).toFixed(2))
     await admin.from("service_request_services").insert({
       request_id:            req.id,
       service_type_id:       svc.serviceTypeId || null,
       service_name_snapshot: svc.serviceName,
-      quantity:              input.quantity,
+      quantity:              isFbm ? 1 : input.quantity,
       unit_price:            unitPrice,
       total_price:           totalPrice,
+      ...(
+        fbmSnapshot
+          ? {
+              total_units:              fbmSnapshot.totalUnits,
+              base_order_fee:           fbmSnapshot.baseOrderFee,
+              additional_item_quantity: fbmSnapshot.additionalItemQuantity,
+              additional_item_fee:      fbmSnapshot.additionalItemFee,
+              additional_item_total:    fbmSnapshot.additionalItemTotal,
+              service_total:            fbmSnapshot.serviceTotal,
+            }
+          : {}
+      ),
       notes:                 svc.notes.trim() || null,
     })
   }
@@ -425,15 +486,29 @@ export async function updateRequest(id: string, input: UpdateInput): Promise<Ser
   await admin.from("service_request_services").delete().eq("request_id", id)
   if (!becomingCancelled && validServices.length > 0) {
     for (const svc of validServices) {
-      const unitPrice  = await lookupUnitPrice(svc.serviceTypeId, svc.serviceName, input.quantity)
-      const totalPrice = parseFloat((unitPrice * input.quantity).toFixed(2))
+      const isFbm = svc.serviceName === "FBM Fulfillment"
+      const unitPrice  = await lookupUnitPrice(svc.serviceTypeId, svc.serviceName, isFbm ? 1 : input.quantity)
+      const fbmSnapshot = isFbm ? calculateFbmSnapshot(unitPrice, input.quantity) : null
+      const totalPrice = fbmSnapshot?.serviceTotal ?? parseFloat((unitPrice * input.quantity).toFixed(2))
       await admin.from("service_request_services").insert({
         request_id:            id,
         service_type_id:       svc.serviceTypeId || null,
         service_name_snapshot: svc.serviceName,
-        quantity:              input.quantity,
+        quantity:              isFbm ? 1 : input.quantity,
         unit_price:            unitPrice,
         total_price:           totalPrice,
+        ...(
+          fbmSnapshot
+            ? {
+                total_units:              fbmSnapshot.totalUnits,
+                base_order_fee:           fbmSnapshot.baseOrderFee,
+                additional_item_quantity: fbmSnapshot.additionalItemQuantity,
+                additional_item_fee:      fbmSnapshot.additionalItemFee,
+                additional_item_total:    fbmSnapshot.additionalItemTotal,
+                service_total:            fbmSnapshot.serviceTotal,
+              }
+            : {}
+        ),
         notes:                 svc.notes.trim() || null,
       })
     }

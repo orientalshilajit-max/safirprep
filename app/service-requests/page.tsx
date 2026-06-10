@@ -29,7 +29,7 @@ import {
 import { listProductClients, listProducts } from "@/app/products/actions"
 import { createInvoice, listInvoices } from "@/app/invoices/actions"
 import { uploadFile }         from "@/app/files/actions"
-import type { ServiceRequest, ServiceStatus, ServiceType, DataTableColumn, FileCategory, Invoice } from "@/lib/types"
+import type { ServiceRequest, ServiceStatus, ServiceType, DataTableColumn, FileCategory, Invoice, InvoiceLineItem } from "@/lib/types"
 
 const PAGE_SIZE = 8
 
@@ -42,6 +42,51 @@ const SERVICE_UNIT_PRICES: Record<string, number> = {
 function fileCategory(service: string): FileCategory {
   if (["FBA Prep", "Labeling", "Bundling"].includes(service)) return "Labels"
   return "Product Docs"
+}
+
+function invoiceLineItemsForRequest(request: ServiceRequest): Omit<InvoiceLineItem, "id">[] {
+  const services = request.services.length > 0
+    ? request.services
+    : [{
+        serviceName: request.service,
+        serviceTypeId: null,
+        quantity: request.quantity,
+        unitPrice: SERVICE_UNIT_PRICES[request.service] ?? 1.00,
+        totalPrice: (SERVICE_UNIT_PRICES[request.service] ?? 1.00) * request.quantity,
+        notes: "",
+      }]
+
+  return services.flatMap((svc) => {
+    if (svc.serviceName === "FBM Fulfillment" && svc.fbmCalculation) {
+      const calc = svc.fbmCalculation
+      const rows: Omit<InvoiceLineItem, "id">[] = [{
+        description:   `FBM Fulfillment — 1 order @ base fee (${request.productName})`,
+        quantity:      1,
+        unitPrice:     calc.baseOrderFee,
+        serviceName:   "FBM Fulfillment — 1 order @ base fee",
+        serviceTypeId: svc.serviceTypeId,
+      }]
+
+      if (calc.additionalItemQuantity > 0) {
+        rows.push({
+          description: `Additional Items — ${calc.additionalItemQuantity} units @ $${calc.additionalItemFee.toFixed(2)}`,
+          quantity:    calc.additionalItemQuantity,
+          unitPrice:   calc.additionalItemFee,
+          serviceName: `Additional Items — ${calc.additionalItemQuantity} units @ $${calc.additionalItemFee.toFixed(2)}`,
+        })
+      }
+
+      return rows
+    }
+
+    return [{
+      description:   `${svc.serviceName || "Deleted service"} – ${request.productName} (${svc.quantity} units)`,
+      quantity:      svc.quantity,
+      unitPrice:     svc.unitPrice,
+      serviceName:   svc.serviceName || "Deleted service",
+      serviceTypeId: svc.serviceTypeId,
+    }]
+  })
 }
 
 const OPEN_STATUSES: ServiceStatus[] = ["New"]
@@ -396,17 +441,12 @@ export default function ServiceRequestsPage() {
       const alreadyHasInvoice = invoices.some((inv) => inv.relatedRequestNumber === editing.requestNumber)
       if (role === "admin" && becomingInvoiced && !alreadyHasInvoice) {
         try {
-          const unitPrice = SERVICE_UNIT_PRICES[primaryServiceName] ?? 1.00
           const dueDate   = new Date(Date.now() + 14 * 86_400_000)
             .toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
           await createInvoice({
             clientId:  editing.clientId,
             requestId: editing.id,
-            lineItems: [{
-              description: `${primaryServiceName} – ${updated.productName} (${form.quantity} units)`,
-              quantity:    form.quantity,
-              unitPrice,
-            }],
+            lineItems: invoiceLineItemsForRequest(updated),
             dueDate,
             notes: "",
           })
@@ -541,24 +581,10 @@ export default function ServiceRequestsPage() {
             const dueDateObj = new Date()
             dueDateObj.setDate(dueDateObj.getDate() + 14)
             const dueDate = dueDateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
-            const lineItems = request.services.length > 0
-              ? request.services.map((svc) => ({
-                  description:   `${svc.serviceName || "Deleted service"} – ${request.productName} (${svc.quantity} units)`,
-                  quantity:      svc.quantity,
-                  unitPrice:     svc.unitPrice,
-                  serviceName:   svc.serviceName || "Deleted service",
-                  serviceTypeId: svc.serviceTypeId,
-                }))
-              : [{
-                  description: `${request.service} – ${request.productName} (${request.quantity} units)`,
-                  quantity:    request.quantity,
-                  unitPrice:   SERVICE_UNIT_PRICES[request.service] ?? 1.00,
-                  serviceName: request.service,
-                }]
             await createInvoice({
               clientId:  request.clientId,
               requestId: request.id,
-              lineItems,
+              lineItems: invoiceLineItemsForRequest(request),
               dueDate,
               notes: "",
             })

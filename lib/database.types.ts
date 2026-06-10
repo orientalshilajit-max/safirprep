@@ -394,6 +394,12 @@ export type Database = {
           unit_price: number
           total: number | null
           total_price: number
+          total_units: number
+          base_order_fee: number
+          additional_item_quantity: number
+          additional_item_fee: number
+          additional_item_total: number
+          service_total: number
           notes: string | null
           created_at: string
         }
@@ -409,6 +415,12 @@ export type Database = {
           unit_price?: number
           total?: number | null
           total_price?: number
+          total_units?: number
+          base_order_fee?: number
+          additional_item_quantity?: number
+          additional_item_fee?: number
+          additional_item_total?: number
+          service_total?: number
           notes?: string | null
           created_at?: string
         }
@@ -424,6 +436,12 @@ export type Database = {
           unit_price?: number
           total?: number | null
           total_price?: number
+          total_units?: number
+          base_order_fee?: number
+          additional_item_quantity?: number
+          additional_item_fee?: number
+          additional_item_total?: number
+          service_total?: number
           notes?: string | null
           created_at?: string
         }

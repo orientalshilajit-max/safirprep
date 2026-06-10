@@ -163,6 +163,48 @@ function computeRowPrice(
   return match ? parseFloat((match.pricePerUnit * qty).toFixed(2)) : null
 }
 
+function computeUnitPrice(
+  serviceName: string,
+  serviceTypeId: string | null,
+  qty: number,
+  types: AvailableServiceType[]
+): number | null {
+  if (!serviceName || qty <= 0 || types.length === 0) return null
+  const found = types.find(
+    (t) => (serviceTypeId && t.id === serviceTypeId) || t.name === serviceName
+  )
+  if (!found || found.pricingRules.length === 0) return null
+  const eligible = [...found.pricingRules]
+    .filter((r) => r.minQty <= qty)
+    .sort((a, b) => b.minQty - a.minQty)
+  const match = eligible.find((r) => r.maxQty === null || r.maxQty >= qty)
+  return match ? match.pricePerUnit : null
+}
+
+function computeFbmCalculation(
+  serviceTypeId: string | null,
+  totalUnits: number,
+  types: AvailableServiceType[]
+) {
+  const safeUnits = Math.max(totalUnits, 1)
+  const baseOrderFee = computeUnitPrice("FBM Fulfillment", serviceTypeId, 1, types)
+  if (baseOrderFee === null) return null
+
+  const additionalItemQuantity = Math.max(safeUnits - 1, 0)
+  const additionalItemFee = 0.50
+  const additionalItemTotal = parseFloat((additionalItemQuantity * additionalItemFee).toFixed(2))
+  const serviceTotal = parseFloat((baseOrderFee + additionalItemTotal).toFixed(2))
+
+  return {
+    totalUnits: safeUnits,
+    baseOrderFee,
+    additionalItemQuantity,
+    additionalItemFee,
+    additionalItemTotal,
+    serviceTotal,
+  }
+}
+
 /* ── Form state ─────────────────────────────────────────── */
 type ServiceRowState = {
   rowId: string
@@ -412,11 +454,17 @@ export function RequestModal({ isOpen, onClose, onSave, onRetryUpload, request, 
   const hasServiceFields = needsLabels || needsFBM || needsBundling || needsOther
 
   /* ── Price rows for estimate section ───────────────────── */
+  const fbmServiceRow = form.services.find((s) => s.serviceName === "FBM Fulfillment")
+  const fbmCalculation = fbmServiceRow
+    ? computeFbmCalculation(fbmServiceRow.serviceTypeId, effectiveQuantity, availServiceTypes)
+    : null
   const pricedRows = form.services
     .filter((s) => s.serviceName)
     .map((s) => ({
       name:  s.serviceName,
-      price: computeRowPrice(s.serviceName, s.serviceTypeId, effectiveQuantity, availServiceTypes),
+      price: s.serviceName === "FBM Fulfillment"
+        ? fbmCalculation?.serviceTotal ?? null
+        : computeRowPrice(s.serviceName, s.serviceTypeId, effectiveQuantity, availServiceTypes),
     }))
   const pricedCount   = pricedRows.filter((r) => r.price !== null).length
   const totalEstimate = pricedRows.reduce((sum, r) => sum + (r.price ?? 0), 0)
@@ -594,7 +642,14 @@ export function RequestModal({ isOpen, onClose, onSave, onRetryUpload, request, 
                   </div>
                   {row.serviceName && effectiveQuantity > 0 && !isMockMode && (
                     <p className="mt-1 text-[12px]">
-                      {rowPrice !== null ? (
+                      {row.serviceName === "FBM Fulfillment" && fbmCalculation ? (
+                        <span className="text-blue-600 font-medium">
+                          FBM Fulfillment: 1 order × ${fbmCalculation.baseOrderFee.toFixed(2)}
+                          {fbmCalculation.additionalItemQuantity > 0
+                            ? ` + ${fbmCalculation.additionalItemQuantity} additional × $${fbmCalculation.additionalItemFee.toFixed(2)} = $${fbmCalculation.serviceTotal.toFixed(2)}`
+                            : ` = $${fbmCalculation.serviceTotal.toFixed(2)}`}
+                        </span>
+                      ) : rowPrice !== null ? (
                         <span className="text-blue-600 font-medium">
                           {row.serviceName}: {effectiveQuantity.toLocaleString()} × ${(rowPrice / effectiveQuantity).toFixed(2)} = ${rowPrice.toFixed(2)}
                         </span>
@@ -633,7 +688,9 @@ export function RequestModal({ isOpen, onClose, onSave, onRetryUpload, request, 
                   <div key={r.name} className="flex items-center justify-between text-[12px] text-gray-600">
                     <span>{r.name}</span>
                     <span className="tabular-nums">
-                      {effectiveQuantity.toLocaleString()} × ${(r.price / effectiveQuantity).toFixed(2)} = ${r.price.toFixed(2)}
+                      {r.name === "FBM Fulfillment" && fbmCalculation
+                        ? `1 order @ $${fbmCalculation.baseOrderFee.toFixed(2)} + additional items $${fbmCalculation.additionalItemTotal.toFixed(2)} = $${r.price.toFixed(2)}`
+                        : `${effectiveQuantity.toLocaleString()} × $${(r.price / effectiveQuantity).toFixed(2)} = $${r.price.toFixed(2)}`}
                     </span>
                   </div>
                 )
@@ -682,6 +739,22 @@ export function RequestModal({ isOpen, onClose, onSave, onRetryUpload, request, 
             {needsFBM && (
               <div className="space-y-3">
                 <p className={labelClass}>FBM Details</p>
+                {fbmCalculation && (
+                  <div className="rounded-lg border border-blue-100 bg-blue-50 px-3 py-2.5">
+                    <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[12px] text-blue-900">
+                      <span>Total units</span>
+                      <span className="text-right font-semibold tabular-nums">{fbmCalculation.totalUnits.toLocaleString()}</span>
+                      <span>First unit included</span>
+                      <span className="text-right font-semibold">Yes</span>
+                      <span>Additional items</span>
+                      <span className="text-right font-semibold tabular-nums">{fbmCalculation.additionalItemQuantity.toLocaleString()}</span>
+                      <span>Additional items fee</span>
+                      <span className="text-right font-semibold tabular-nums">${fbmCalculation.additionalItemFee.toFixed(2)}</span>
+                      <span className="pt-1 border-t border-blue-100">Total FBM service fee</span>
+                      <span className="pt-1 border-t border-blue-100 text-right font-bold tabular-nums">${fbmCalculation.serviceTotal.toFixed(2)}</span>
+                    </div>
+                  </div>
+                )}
                 <UploadBtn label="Upload Shipping Label" onAdd={addFiles} />
                 <div>
                   <label className={labelClass}>Order / Recipient Notes</label>
