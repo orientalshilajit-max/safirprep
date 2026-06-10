@@ -812,10 +812,17 @@ function ServiceList({
     }
     setCheckingId(item.id)
     try {
-      const count = await checkServiceTypeUsage(item.id)
-      const msg = count > 0
-        ? `This service is used in ${count} existing request${count > 1 ? "s" : ""}. Deleting it may affect historical records.\n\nDelete anyway?`
-        : `Permanently delete "${item.name}"? This cannot be undone.`
+      const usage = await checkServiceTypeUsage(item.id)
+      const total = usage.requests + usage.invoices
+      let msg: string
+      if (total > 0) {
+        const parts: string[] = []
+        if (usage.requests > 0) parts.push(`${usage.requests} service request${usage.requests > 1 ? "s" : ""}`)
+        if (usage.invoices  > 0) parts.push(`${usage.invoices} invoice item${usage.invoices  > 1 ? "s" : ""}`)
+        msg = `"${item.name}" is referenced by ${parts.join(" and ")}. Historical names and prices are preserved.\n\nDelete anyway?`
+      } else {
+        msg = `Permanently delete "${item.name}"? This cannot be undone.`
+      }
       setDeleteMsg(msg)
       setDeleteTarget(item)
     } catch {

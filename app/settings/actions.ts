@@ -468,20 +468,18 @@ function mapServiceRow(row: {
   }
 }
 
-export async function checkServiceTypeUsage(id: string): Promise<number> {
-  const supabase = await createSupabaseServerClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user || user.app_metadata?.role !== "admin") return 0
-
-  const { data: st } = await supabase
-    .from("service_types").select("name").eq("id", id).single()
-  if (!st) return 0
-
-  const { count } = await supabase
-    .from("service_requests")
-    .select("id", { count: "exact", head: true })
-    .eq("service_type", st.name)
-  return count ?? 0
+export async function checkServiceTypeUsage(id: string): Promise<{ requests: number; invoices: number }> {
+  await requireAdmin()
+  const admin = createServerAdminClient()
+  const [{ count: reqCount }, { count: invCount }] = await Promise.all([
+    admin.from("service_request_services")
+      .select("id", { count: "exact", head: true })
+      .eq("service_type_id", id),
+    (admin.from("invoice_items") as unknown as ReturnType<typeof admin.from>)
+      .select("id", { count: "exact", head: true })
+      .eq("service_type_id", id),
+  ])
+  return { requests: reqCount ?? 0, invoices: invCount ?? 0 }
 }
 
 export async function deleteServiceType(id: string): Promise<void> {

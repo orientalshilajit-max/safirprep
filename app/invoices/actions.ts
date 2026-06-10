@@ -25,12 +25,13 @@ const FROM_DB: Record<string, InvoiceStatus> = {
 // ── Row type ──────────────────────────────────────────────────
 
 type DbLineItem = {
-  id:           string
-  description:  string
-  quantity:     number
-  unit_price:   number | string
-  product_name: string | null
-  service_name: string | null
+  id:              string
+  description:     string
+  quantity:        number
+  unit_price:      number | string
+  product_name:    string | null
+  service_name:    string | null
+  service_type_id: string | null
 }
 
 type DbInvoiceRow = {
@@ -73,8 +74,9 @@ function mapRow(row: DbInvoiceRow): Invoice {
       unitPrice:   typeof li.unit_price === "string"
                      ? parseFloat(li.unit_price)
                      : li.unit_price,
-      productName: li.product_name ?? undefined,
-      serviceName: li.service_name ?? undefined,
+      productName:   li.product_name    ?? undefined,
+      serviceName:   li.service_name    ?? undefined,
+      serviceTypeId: li.service_type_id ?? undefined,
     })),
     notes:                   row.notes ?? "",
     relatedRequestNumber:    row.service_requests?.request_number ?? undefined,
@@ -87,7 +89,7 @@ const INVOICE_SELECT = `
   id, client_id, request_id, invoice_number, status, amount, due_date, notes, created_at,
   combined_into_invoice_id,
   clients (company_name, email),
-  invoice_items (id, description, quantity, unit_price, product_name, service_name),
+  invoice_items (id, description, quantity, unit_price, product_name, service_name, service_type_id),
   service_requests (request_number)
 ` as const
 
@@ -101,10 +103,8 @@ function toIsoDate(str: string): string | null {
 }
 
 // ── Type alias for invoice_items inserts ─────────────────────
-// product_name / service_name were added in migration 20260602000001.
-// Until Supabase types are regenerated after applying the migration, cast inserts
-// to the known columns so RejectExcessProperties doesn't block compilation.
-// The JS client still serialises all runtime keys, so the new columns are saved.
+// These columns were added in migrations after the initial type generation.
+// Cast inserts to avoid RejectExcessProperties; the JS client serialises all keys.
 type InvoiceItemInsert = {
   invoice_id:  string
   description: string
@@ -154,7 +154,7 @@ export async function listInvoices(): Promise<Invoice[]> {
 type CreateInput = {
   clientId:   string
   requestId?: string | null
-  lineItems:  { description: string; quantity: number; unitPrice: number; productName?: string; serviceName?: string }[]
+  lineItems:  { description: string; quantity: number; unitPrice: number; productName?: string; serviceName?: string; serviceTypeId?: string | null }[]
   dueDate?:   string
   notes?:     string
 }
@@ -189,10 +189,10 @@ export async function createInvoice(input: CreateInput): Promise<Invoice> {
           quantity:    li.quantity,
           unit_price:  li.unitPrice,
         }
-        // Assign new columns at runtime without TypeScript type widening
         const r = row as Record<string, unknown>
-        r.product_name = li.productName ?? null
-        r.service_name = li.serviceName ?? null
+        r.product_name    = li.productName    ?? null
+        r.service_name    = li.serviceName    ?? null
+        r.service_type_id = li.serviceTypeId  ?? null
         return row
       })
     )
@@ -259,8 +259,9 @@ export async function updateInvoice(id: string, input: UpdateInput): Promise<Inv
           unit_price:  li.unitPrice,
         }
         const r = row as Record<string, unknown>
-        r.product_name = li.productName ?? null
-        r.service_name = li.serviceName ?? null
+        r.product_name    = li.productName    ?? null
+        r.service_name    = li.serviceName    ?? null
+        r.service_type_id = li.serviceTypeId  ?? null
         return row
       })
     )
@@ -423,8 +424,9 @@ export async function combineInvoices(invoiceIds: string[]): Promise<Invoice> {
           unit_price:  li.unitPrice,
         }
         const r = row as Record<string, unknown>
-        r.product_name = li.productName ?? null
-        r.service_name = li.serviceName ?? null
+        r.product_name    = li.productName    ?? null
+        r.service_name    = li.serviceName    ?? null
+        r.service_type_id = li.serviceTypeId  ?? null
         return row
       })
     )

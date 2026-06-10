@@ -179,6 +179,7 @@ export type InvoiceLineItem = {
   unitPrice: number
   productName?: string
   serviceName?: string
+  serviceTypeId?: string | null
 }
 
 export type Invoice = {

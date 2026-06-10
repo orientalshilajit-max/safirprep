@@ -599,7 +599,7 @@ export default function ServiceRequestsPage() {
       cell: (row) => {
         const svcs = row.services?.length ? row.services : null
         if (!svcs) return <span className="text-[12px] text-gray-700">{row.service}</span>
-        const first = svcs[0].serviceName
+        const first = svcs[0].serviceName || "Deleted service"
         const extra = svcs.length - 1
         return (
           <span className="text-[12px] text-gray-700">
@@ -791,7 +791,7 @@ export default function ServiceRequestsPage() {
             keyExtractor={(r) => r.id}
             mobileCard={(r) => {
               const svcs = r.services?.length ? r.services : null
-              const primarySvc = svcs ? svcs[0].serviceName : r.service
+              const primarySvc = svcs ? (svcs[0].serviceName || "Deleted service") : r.service
               const extraSvcs  = svcs ? svcs.length - 1 : 0
               const canEdit = role === "admin" || r.status === "New"
               const fileCount = isMockMode
