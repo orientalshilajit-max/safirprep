@@ -22,9 +22,8 @@ import {
   checkCarrierUsage,
   reorderCarriers,
   upsertServiceType,
-  deleteOrArchiveServiceType,
+  deleteServiceType,
   checkServiceTypeUsage,
-  type DeleteOrArchiveResult,
   reorderServiceTypes,
   upsertPricingRule,
   deletePricingRule,
@@ -148,12 +147,12 @@ function InlineError({ msg }: { msg: string | null }) {
   )
 }
 
-function InlineSuccess({ show, msg }: { show: boolean; msg?: string }) {
+function InlineSuccess({ show }: { show: boolean }) {
   if (!show) return null
   return (
     <div className="flex items-start gap-2 rounded-lg border border-green-100 bg-green-50 px-3 py-2.5">
       <CheckCircle2 className="size-3.5 text-green-500 mt-0.5 shrink-0" />
-      <p className="text-[12px] text-green-700">{msg ?? "Service updated successfully."}</p>
+      <p className="text-[12px] text-green-700">Service updated successfully.</p>
     </div>
   )
 }
@@ -494,8 +493,10 @@ function validateRule(
 }
 
 function ruleDisplay(r: PricingRule) {
-  const range = r.maxQty !== null ? `${r.minQty}–${r.maxQty}` : `${r.minQty}+`
-  return `${range} units · $${r.pricePerUnit.toFixed(2)}/unit`
+  const minQ  = r.minQty  ?? "?"
+  const price = r.pricePerUnit != null ? r.pricePerUnit.toFixed(2) : "?"
+  const range = r.maxQty  != null ? `${minQ}–${r.maxQty}` : `${minQ}+`
+  return `${range} units · $${price}/unit`
 }
 
 function PricingRuleSubList({
@@ -503,7 +504,7 @@ function PricingRuleSubList({
 }: {
   serviceTypeId: string; initialRules: PricingRule[]; isMockMode: boolean
 }) {
-  const [rules,       setRules]       = useState<PricingRule[]>(initialRules)
+  const [rules,       setRules]       = useState<PricingRule[]>(initialRules ?? [])
   const [editingId,   setEditingId]   = useState<string | null>(null)
   const [editState,   setEditState]   = useState<RuleEditState>(emptyRuleState())
   const [adding,      setAdding]      = useState(false)
@@ -524,7 +525,7 @@ function PricingRuleSubList({
     setEditState({
       minQty:       String(rule.minQty),
       maxQty:       rule.maxQty !== null ? String(rule.maxQty) : "",
-      pricePerUnit: rule.pricePerUnit.toFixed(2),
+      pricePerUnit: rule.pricePerUnit != null ? rule.pricePerUnit.toFixed(2) : "0.00",
       label:        rule.label ?? "",
     })
     setRuleError(null)
@@ -717,18 +718,15 @@ function ServiceList({
   const [saving,       setSaving]      = useState<string | null>(null)
   const [error,        setError]       = useState<string | null>(null)
   const [success,      setSuccess]     = useState(false)
-  const [successMsg,   setSuccessMsg]  = useState<string | undefined>(undefined)
   const [deleteTarget, setDeleteTarget] = useState<SettingsServiceType | null>(null)
   const [deleteMsg,    setDeleteMsg]   = useState("")
-  const [willArchive,  setWillArchive] = useState(false)
   const [deleting,     setDeleting]    = useState(false)
   const [checkingId,   setCheckingId]  = useState<string | null>(null)
 
-  function flashSuccess(msg?: string) {
+  function flashSuccess() {
     setError(null)
-    setSuccessMsg(msg)
     setSuccess(true)
-    setTimeout(() => setSuccess(false), msg ? 4000 : 2500)
+    setTimeout(() => setSuccess(false), 2500)
   }
 
   function startEdit(item: SettingsServiceType) {
@@ -754,7 +752,7 @@ function ServiceList({
         id: item.id, name, price: item.price,
         visibleToCustomers: editState.visibleToCustomers, sortOrder: item.sortOrder,
       })
-      setItems((prev) => prev.map((i) => i.id === item.id ? { ...updated, pricingRules: item.pricingRules } : i))
+      setItems((prev) => prev.map((i) => i.id === item.id ? { ...updated, pricingRules: item.pricingRules ?? [] } : i))
       setEditingId(null)
       flashSuccess()
     } catch (err) {
@@ -808,27 +806,21 @@ function ServiceList({
   async function handleDeleteClick(item: SettingsServiceType) {
     setError(null)
     if (isMockMode) {
-      setWillArchive(false)
-      setDeleteMsg(`Permanently delete "${item.name}"? Pricing rules will also be deleted. This cannot be undone.`)
+      setDeleteMsg(`Permanently delete "${item.name}"? This cannot be undone.`)
       setDeleteTarget(item)
       return
     }
     setCheckingId(item.id)
     try {
       const count = await checkServiceTypeUsage(item.id)
-      if (count > 0) {
-        setWillArchive(true)
-        setDeleteMsg(
-          `"${item.name}" is used in ${count} service request${count > 1 ? "s" : ""}.\n\n` +
-          `It cannot be permanently deleted. It will be archived and hidden from clients instead.`
-        )
-      } else {
-        setWillArchive(false)
-        setDeleteMsg(`Permanently delete "${item.name}"? Pricing rules will also be deleted. This cannot be undone.`)
-      }
+      const msg = count > 0
+        ? `This service is used in ${count} existing request${count > 1 ? "s" : ""}. Deleting it may affect historical records.\n\nDelete anyway?`
+        : `Permanently delete "${item.name}"? This cannot be undone.`
+      setDeleteMsg(msg)
       setDeleteTarget(item)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to check usage.")
+    } catch {
+      setDeleteMsg(`Permanently delete "${item.name}"? This cannot be undone.`)
+      setDeleteTarget(item)
     } finally {
       setCheckingId(null)
     }
@@ -837,22 +829,13 @@ function ServiceList({
   async function confirmDelete() {
     if (!deleteTarget) return
     const id = deleteTarget.id
-    if (isMockMode) {
-      setItems((prev) => prev.filter((i) => i.id !== id))
-      setDeleteTarget(null)
-      return
-    }
+    if (isMockMode) { setItems((prev) => prev.filter((i) => i.id !== id)); setDeleteTarget(null); return }
     setDeleting(true)
     try {
-      const result: DeleteOrArchiveResult = await deleteOrArchiveServiceType(id)
+      await deleteServiceType(id)
       setItems((prev) => prev.filter((i) => i.id !== id))
       if (expandedId === id) setExpandedId(null)
       setDeleteTarget(null)
-      if (result.action === "archived") {
-        flashSuccess("This service has history and was archived instead of deleted.")
-      } else {
-        flashSuccess("Service deleted.")
-      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete service.")
     } finally {
@@ -862,7 +845,7 @@ function ServiceList({
 
   function renderServiceRow(item: SettingsServiceType, idx: number) {
     const isExpanded = expandedId === item.id
-    const ruleCount  = item.pricingRules.length
+    const ruleCount  = (item.pricingRules ?? []).length
 
     if (editingId === item.id) {
       return (
@@ -945,7 +928,7 @@ function ServiceList({
         {isExpanded && (
           <PricingRuleSubList
             serviceTypeId={item.id}
-            initialRules={item.pricingRules}
+            initialRules={item.pricingRules ?? []}
             isMockMode={isMockMode}
           />
         )}
@@ -956,7 +939,7 @@ function ServiceList({
   return (
     <div className="space-y-1">
       <InlineError msg={error} />
-      <InlineSuccess show={success} msg={successMsg} />
+      <InlineSuccess show={success} />
 
       {items.map((item, idx) => (
         <div key={item.id}>{renderServiceRow(item, idx)}</div>
@@ -1005,13 +988,9 @@ function ServiceList({
         isOpen={!!deleteTarget}
         onClose={() => !deleting && setDeleteTarget(null)}
         onConfirm={confirmDelete}
-        title={willArchive ? "Archive service type?" : "Delete service type?"}
+        title="Delete service type?"
         message={deleteMsg}
-        confirmLabel={
-          deleting
-            ? (willArchive ? "Archiving…" : "Deleting…")
-            : (willArchive ? "Archive Service" : "Delete Permanently")
-        }
+        confirmLabel={deleting ? "Deleting…" : "Delete Permanently"}
         variant="danger"
       />
     </div>

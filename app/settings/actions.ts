@@ -87,7 +87,7 @@ export async function fetchSettings(): Promise<AllSettings> {
   const [csRes, carRes, stRes, prRes] = await Promise.all([
     supabase.from("company_settings").select("*").order("updated_at", { ascending: false }).limit(1).maybeSingle(),
     supabase.from("carriers").select("*").order("sort_order").order("name"),
-    supabase.from("service_types").select("*").is("archived_at", null).order("sort_order").order("name"),
+    supabase.from("service_types").select("*").order("sort_order").order("name"),
     supabase.from("service_pricing_rules").select("*").order("sort_order").order("min_qty"),
   ])
 
@@ -96,9 +96,12 @@ export async function fetchSettings(): Promise<AllSettings> {
     throw new Error(csRes.error.message)
   }
 
-  console.log("[settings] loading carriers…", carRes.error?.message ?? "ok")
-  console.log("[settings] loading service_types…", stRes.error?.message ?? "ok")
-  console.log("[settings] loading service_pricing_rules…", prRes.error?.message ?? "ok")
+  if (carRes.error) console.error("[settings] carriers error:", carRes.error)
+  else              console.log("[settings] carriers ok")
+  if (stRes.error)  console.error("[settings] service_types error:", stRes.error)
+  else              console.log("[settings] service_types ok:", stRes.data?.length ?? 0, "rows")
+  if (prRes.error)  console.error("[settings] service_pricing_rules error:", prRes.error)
+  else              console.log("[settings] service_pricing_rules ok:", prRes.data?.length ?? 0, "rows")
 
   let cs = csRes.data
   if (!cs) {
@@ -116,15 +119,21 @@ export async function fetchSettings(): Promise<AllSettings> {
     }
   }
 
-  const allRules: PricingRule[] = (prRes.data ?? []).map((r) => ({
-    id:             r.id,
-    serviceTypeId:  r.service_type_id,
-    minQty:         r.min_qty,
-    maxQty:         r.max_qty,
-    pricePerUnit:   r.price_per_unit,
-    label:          r.label,
-    sortOrder:      r.sort_order,
-  }))
+  const allRules: PricingRule[] = (prRes.data ?? [])
+    .filter((r) => {
+      const valid = r.id && r.service_type_id && r.min_qty != null && r.price_per_unit != null
+      if (!valid) console.error("[settings] skipping invalid pricing rule row:", r)
+      return valid
+    })
+    .map((r) => ({
+      id:           r.id,
+      serviceTypeId: r.service_type_id,
+      minQty:        r.min_qty,
+      maxQty:        r.max_qty ?? null,
+      pricePerUnit:  Number(r.price_per_unit),
+      label:         r.label ?? null,
+      sortOrder:     r.sort_order ?? 0,
+    }))
 
   return {
     company: {
@@ -468,78 +477,27 @@ function mapServiceRow(row: {
 }
 
 export async function checkServiceTypeUsage(id: string): Promise<number> {
-  await requireAdmin()
-  const admin = createServerAdminClient()
+  const supabase = await createSupabaseServerClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || user.app_metadata?.role !== "admin") return 0
 
-  const { data: st } = await admin
+  const { data: st } = await supabase
     .from("service_types").select("name").eq("id", id).single()
   if (!st) return 0
 
-  const [srRes, srsRes] = await Promise.all([
-    admin.from("service_requests")
-      .select("id", { count: "exact", head: true })
-      .eq("service_type", st.name),
-    admin.from("service_request_services")
-      .select("id", { count: "exact", head: true })
-      .eq("service_type_id", id),
-  ])
-
-  return (srRes.count ?? 0) + (srsRes.count ?? 0)
+  const { count } = await supabase
+    .from("service_requests")
+    .select("id", { count: "exact", head: true })
+    .eq("service_type", st.name)
+  return count ?? 0
 }
 
-export type DeleteOrArchiveResult =
-  | { action: "deleted" }
-  | { action: "archived"; usageCount: number }
-
-export async function deleteOrArchiveServiceType(id: string): Promise<DeleteOrArchiveResult> {
+export async function deleteServiceType(id: string): Promise<void> {
   await requireAdmin()
   const admin = createServerAdminClient()
-
-  const { data: st, error: fetchErr } = await admin
-    .from("service_types").select("name").eq("id", id).single()
-  if (fetchErr || !st) throw new Error(fetchErr?.message ?? "Service type not found.")
-
-  const [srRes, srsRes] = await Promise.all([
-    admin.from("service_requests")
-      .select("id", { count: "exact", head: true })
-      .eq("service_type", st.name),
-    admin.from("service_request_services")
-      .select("id", { count: "exact", head: true })
-      .eq("service_type_id", id),
-  ])
-
-  if (srRes.error)  throw new Error(srRes.error.message)
-  if (srsRes.error) throw new Error(srsRes.error.message)
-
-  const usageCount = (srRes.count ?? 0) + (srsRes.count ?? 0)
-
-  if (usageCount === 0) {
-    const { error } = await admin.from("service_types").delete().eq("id", id)
-    if (error) {
-      console.error("[deleteOrArchiveServiceType] hard-delete failed:", error.message)
-      throw new Error(error.message)
-    }
-    revalidatePath("/settings")
-    return { action: "deleted" }
-  }
-
-  // Has usage — archive instead of delete
-  // archived_at not yet in generated types; cast to apply the new column
-  const archivePayload: Record<string, unknown> = {
-    archived_at:          new Date().toISOString(),
-    visible_to_customers: false,
-  }
-  const { error: archErr } = await admin
-    .from("service_types")
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    .update(archivePayload as any)
-    .eq("id", id)
-  if (archErr) {
-    console.error("[deleteOrArchiveServiceType] archive failed:", archErr.message)
-    throw new Error(archErr.message)
-  }
+  const { error } = await admin.from("service_types").delete().eq("id", id)
+  if (error) throw new Error(error.message)
   revalidatePath("/settings")
-  return { action: "archived", usageCount }
 }
 
 export async function reorderServiceTypes(
