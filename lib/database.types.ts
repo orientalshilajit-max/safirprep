@@ -386,9 +386,13 @@ export type Database = {
           id: string
           request_id: string
           service_type_id: string | null
+          service_name: string | null
           service_name_snapshot: string
+          service_description: string | null
+          service_unit: string | null
           quantity: number
           unit_price: number
+          total: number | null
           total_price: number
           notes: string | null
           created_at: string
@@ -397,9 +401,13 @@ export type Database = {
           id?: string
           request_id: string
           service_type_id?: string | null
+          service_name?: string | null
           service_name_snapshot: string
+          service_description?: string | null
+          service_unit?: string | null
           quantity?: number
           unit_price?: number
+          total?: number | null
           total_price?: number
           notes?: string | null
           created_at?: string
@@ -408,9 +416,13 @@ export type Database = {
           id?: string
           request_id?: string
           service_type_id?: string | null
+          service_name?: string | null
           service_name_snapshot?: string
+          service_description?: string | null
+          service_unit?: string | null
           quantity?: number
           unit_price?: number
+          total?: number | null
           total_price?: number
           notes?: string | null
           created_at?: string
@@ -527,6 +539,11 @@ export type Database = {
           quantity: number
           unit_price: number
           total: number
+          product_name: string | null
+          service_name: string | null
+          service_type_id: string | null
+          service_description: string | null
+          service_unit: string | null
           created_at: string
         }
         Insert: {
@@ -535,6 +552,11 @@ export type Database = {
           description: string
           quantity?: number
           unit_price?: number
+          product_name?: string | null
+          service_name?: string | null
+          service_type_id?: string | null
+          service_description?: string | null
+          service_unit?: string | null
           created_at?: string
         }
         Update: {
@@ -543,6 +565,11 @@ export type Database = {
           description?: string
           quantity?: number
           unit_price?: number
+          product_name?: string | null
+          service_name?: string | null
+          service_type_id?: string | null
+          service_description?: string | null
+          service_unit?: string | null
           created_at?: string
         }
         Relationships: [

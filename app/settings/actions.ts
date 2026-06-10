@@ -486,7 +486,14 @@ export async function deleteServiceType(id: string): Promise<void> {
   await requireAdmin()
   const admin = createServerAdminClient()
   const { error } = await admin.from("service_types").delete().eq("id", id)
-  if (error) throw new Error(error.message)
+  if (error) {
+    console.error("[settings] delete service type failed:", error)
+    throw new Error(
+      error.code === "23503"
+        ? "This service type is still linked to existing records. Apply the latest database migration, then try deleting it again."
+        : "We could not delete this service type. Please try again."
+    )
+  }
   revalidatePath("/settings")
 }
 

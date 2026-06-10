@@ -538,14 +538,27 @@ export default function ServiceRequestsPage() {
         const alreadyHasInvoice = invoices.some((inv) => inv.relatedRequestNumber === request.requestNumber)
         if (!alreadyHasInvoice) {
           try {
-            const unitPrice  = SERVICE_UNIT_PRICES[request.service] ?? 1.00
             const dueDateObj = new Date()
             dueDateObj.setDate(dueDateObj.getDate() + 14)
             const dueDate = dueDateObj.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
+            const lineItems = request.services.length > 0
+              ? request.services.map((svc) => ({
+                  description:   `${svc.serviceName || "Deleted service"} – ${request.productName} (${svc.quantity} units)`,
+                  quantity:      svc.quantity,
+                  unitPrice:     svc.unitPrice,
+                  serviceName:   svc.serviceName || "Deleted service",
+                  serviceTypeId: svc.serviceTypeId,
+                }))
+              : [{
+                  description: `${request.service} – ${request.productName} (${request.quantity} units)`,
+                  quantity:    request.quantity,
+                  unitPrice:   SERVICE_UNIT_PRICES[request.service] ?? 1.00,
+                  serviceName: request.service,
+                }]
             await createInvoice({
               clientId:  request.clientId,
               requestId: request.id,
-              lineItems: [{ description: `${request.service} – ${request.productName} (${request.quantity} units)`, quantity: request.quantity, unitPrice }],
+              lineItems,
               dueDate,
               notes: "",
             })

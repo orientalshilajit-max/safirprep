@@ -80,11 +80,16 @@ export async function listAvailableServiceTypes(): Promise<AvailableServiceType[
 type DbServiceRow = {
   id: string
   service_type_id: string | null
-  service_name_snapshot: string
+  service_name: string | null
+  service_name_snapshot: string | null
+  service_description: string | null
+  service_unit: string | null
   quantity: number
   unit_price: number
+  total: number | null
   total_price: number
   notes: string | null
+  service_types: { name: string } | null
 }
 
 type DbRow = {
@@ -117,10 +122,10 @@ function mapRow(row: DbRow): ServiceRequest {
   const services: RequestService[] = dbSvcs.map((s) => ({
     id:            s.id,
     serviceTypeId: s.service_type_id,
-    serviceName:   s.service_name_snapshot,
+    serviceName:   s.service_name ?? s.service_name_snapshot ?? s.service_types?.name ?? "Deleted service",
     quantity:      s.quantity,
     unitPrice:     s.unit_price,
-    totalPrice:    s.total_price,
+    totalPrice:    s.total ?? s.total_price,
     notes:         s.notes ?? "",
   }))
 
@@ -161,7 +166,11 @@ const REQUEST_SELECT = `
   inventory_deducted, service_details, created_at, deleted_at,
   clients (company_name),
   service_request_items (id, product_id, quantity, notes, products (name, sku)),
-  service_request_services (id, service_type_id, service_name_snapshot, quantity, unit_price, total_price, notes)
+  service_request_services (
+    id, service_type_id, service_name, service_name_snapshot,
+    service_description, service_unit, quantity, unit_price, total, total_price, notes,
+    service_types (name)
+  )
 ` as const
 
 // ── Inventory helper ──────────────────────────────────────────
@@ -314,9 +323,13 @@ export async function createRequest(input: CreateInput): Promise<ServiceRequest>
     await admin.from("service_request_services").insert({
       request_id:            req.id,
       service_type_id:       svc.serviceTypeId || null,
+      service_name:          svc.serviceName,
       service_name_snapshot: svc.serviceName,
+      service_description:   svc.serviceName === "Other" ? input.serviceDetails.serviceDescription?.trim() || null : null,
+      service_unit:          "unit",
       quantity:              input.quantity,
       unit_price:            unitPrice,
+      total:                 totalPrice,
       total_price:           totalPrice,
       notes:                 svc.notes.trim() || null,
     })
@@ -430,9 +443,13 @@ export async function updateRequest(id: string, input: UpdateInput): Promise<Ser
       await admin.from("service_request_services").insert({
         request_id:            id,
         service_type_id:       svc.serviceTypeId || null,
+        service_name:          svc.serviceName,
         service_name_snapshot: svc.serviceName,
+        service_description:   svc.serviceName === "Other" ? input.serviceDetails.serviceDescription?.trim() || null : null,
+        service_unit:          "unit",
         quantity:              input.quantity,
         unit_price:            unitPrice,
+        total:                 totalPrice,
         total_price:           totalPrice,
         notes:                 svc.notes.trim() || null,
       })
