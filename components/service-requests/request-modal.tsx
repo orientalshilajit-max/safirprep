@@ -282,7 +282,7 @@ export function RequestModal({ isOpen, onClose, onSave, onRetryUpload, request, 
   const [fetchedServiceTypes, setFetchedServiceTypes] = useState<AvailableServiceType[]>([])
 
   const mockServiceTypes = useMemo<AvailableServiceType[]>(
-    () => SERVICE_TYPES.map((name) => ({ id: name, name, visibleToCustomers: true, pricingRules: [] })),
+    () => SERVICE_TYPES.map((name) => ({ id: name, name, unit: null, visibleToCustomers: true, pricingRules: [] })),
     []
   )
   const availServiceTypes = isMockMode ? mockServiceTypes : fetchedServiceTypes

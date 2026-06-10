@@ -765,6 +765,8 @@ export type Database = {
         Row: {
           id: string
           name: string
+          description: string | null
+          unit: string | null
           price: number
           visible_to_customers: boolean
           is_active: boolean
@@ -775,6 +777,8 @@ export type Database = {
         Insert: {
           id?: string
           name: string
+          description?: string | null
+          unit?: string | null
           price?: number
           visible_to_customers?: boolean
           is_active?: boolean
@@ -785,6 +789,8 @@ export type Database = {
         Update: {
           id?: string
           name?: string
+          description?: string | null
+          unit?: string | null
           price?: number
           visible_to_customers?: boolean
           is_active?: boolean

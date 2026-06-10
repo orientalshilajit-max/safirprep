@@ -32,6 +32,7 @@ type DbLineItem = {
   product_name:    string | null
   service_name:    string | null
   service_type_id: string | null
+  service_unit:    string | null
 }
 
 type DbInvoiceRow = {
@@ -77,6 +78,7 @@ function mapRow(row: DbInvoiceRow): Invoice {
       productName:   li.product_name    ?? undefined,
       serviceName:   li.service_name    ?? undefined,
       serviceTypeId: li.service_type_id ?? undefined,
+      serviceUnit:   li.service_unit    ?? undefined,
     })),
     notes:                   row.notes ?? "",
     relatedRequestNumber:    row.service_requests?.request_number ?? undefined,
@@ -89,7 +91,7 @@ const INVOICE_SELECT = `
   id, client_id, request_id, invoice_number, status, amount, due_date, notes, created_at,
   combined_into_invoice_id,
   clients (company_name, email),
-  invoice_items (id, description, quantity, unit_price, product_name, service_name, service_type_id),
+  invoice_items (id, description, quantity, unit_price, product_name, service_name, service_type_id, service_unit),
   service_requests (request_number)
 ` as const
 
@@ -105,11 +107,38 @@ function toIsoDate(str: string): string | null {
 // ── Type alias for invoice_items inserts ─────────────────────
 // These columns were added in migrations after the initial type generation.
 // Cast inserts to avoid RejectExcessProperties; the JS client serialises all keys.
+type InvoiceItemInput = {
+  description: string
+  quantity: number
+  unitPrice: number
+  productName?: string
+  serviceName?: string
+  serviceTypeId?: string | null
+  serviceUnit?: string | null
+}
+
 type InvoiceItemInsert = {
   invoice_id:  string
   description: string
   quantity:    number
   unit_price:  number
+}
+
+function invoiceItemInsert(invoiceId: string, li: InvoiceItemInput): InvoiceItemInsert {
+  const serviceName = li.serviceName?.trim() || null
+  const productName = li.productName?.trim() || null
+  const row: InvoiceItemInsert = {
+    invoice_id:  invoiceId,
+    description: productName || serviceName || li.description,
+    quantity:    li.quantity,
+    unit_price:  li.unitPrice,
+  }
+  const r = row as Record<string, unknown>
+  r.product_name    = productName
+  r.service_name    = serviceName
+  r.service_type_id = li.serviceTypeId ?? null
+  r.service_unit    = li.serviceUnit ?? null
+  return row
 }
 
 // ── Auth helpers ──────────────────────────────────────────────
@@ -154,7 +183,7 @@ export async function listInvoices(): Promise<Invoice[]> {
 type CreateInput = {
   clientId:   string
   requestId?: string | null
-  lineItems:  { description: string; quantity: number; unitPrice: number; productName?: string; serviceName?: string; serviceTypeId?: string | null }[]
+  lineItems:  InvoiceItemInput[]
   dueDate?:   string
   notes?:     string
 }
@@ -182,19 +211,7 @@ export async function createInvoice(input: CreateInput): Promise<Invoice> {
 
   if (input.lineItems.length > 0) {
     const { error: liErr } = await supabase.from("invoice_items").insert(
-      input.lineItems.map((li) => {
-        const row: InvoiceItemInsert = {
-          invoice_id:  inv.id,
-          description: li.productName || li.description,
-          quantity:    li.quantity,
-          unit_price:  li.unitPrice,
-        }
-        const r = row as Record<string, unknown>
-        r.product_name    = li.productName    ?? null
-        r.service_name    = li.serviceName    ?? null
-        r.service_type_id = li.serviceTypeId  ?? null
-        return row
-      })
+      input.lineItems.map((li) => invoiceItemInsert(inv.id, li))
     )
     if (liErr) throw new Error(liErr.message)
   }
@@ -251,19 +268,7 @@ export async function updateInvoice(id: string, input: UpdateInput): Promise<Inv
 
   if (input.lineItems.length > 0) {
     const { error: insErr } = await supabase.from("invoice_items").insert(
-      input.lineItems.map((li) => {
-        const row: InvoiceItemInsert = {
-          invoice_id:  id,
-          description: li.productName || li.description,
-          quantity:    li.quantity,
-          unit_price:  li.unitPrice,
-        }
-        const r = row as Record<string, unknown>
-        r.product_name    = li.productName    ?? null
-        r.service_name    = li.serviceName    ?? null
-        r.service_type_id = li.serviceTypeId  ?? null
-        return row
-      })
+      input.lineItems.map((li) => invoiceItemInsert(id, li))
     )
     if (insErr) throw new Error(insErr.message)
   }
@@ -416,19 +421,7 @@ export async function combineInvoices(invoiceIds: string[]): Promise<Invoice> {
 
   if (allLineItems.length > 0) {
     const { error: liErr } = await supabase.from("invoice_items").insert(
-      allLineItems.map((li) => {
-        const row: InvoiceItemInsert = {
-          invoice_id:  newInv.id,
-          description: li.productName || li.description,
-          quantity:    li.quantity,
-          unit_price:  li.unitPrice,
-        }
-        const r = row as Record<string, unknown>
-        r.product_name    = li.productName    ?? null
-        r.service_name    = li.serviceName    ?? null
-        r.service_type_id = li.serviceTypeId  ?? null
-        return row
-      })
+      allLineItems.map((li) => invoiceItemInsert(newInv.id, li))
     )
     if (liErr) throw new Error(liErr.message)
   }

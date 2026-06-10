@@ -31,6 +31,7 @@ const FROM_DB: Record<string, ServiceStatus> = {
 export type AvailableServiceType = {
   id: string
   name: string
+  unit: string | null
   visibleToCustomers: boolean
   pricingRules: {
     minQty:       number
@@ -49,7 +50,7 @@ export async function listAvailableServiceTypes(): Promise<AvailableServiceType[
 
   const { data, error } = await supabase
     .from("service_types")
-    .select("id, name, visible_to_customers, service_pricing_rules(min_qty, max_qty, price_per_unit, label, sort_order)")
+    .select("id, name, unit, visible_to_customers, service_pricing_rules(min_qty, max_qty, price_per_unit, label, sort_order)")
     .eq("is_active", true)
     .order("sort_order")
     .order("name")
@@ -61,6 +62,7 @@ export async function listAvailableServiceTypes(): Promise<AvailableServiceType[
     .map((s) => ({
       id:                 s.id,
       name:               s.name,
+      unit:               (s as { unit?: string | null }).unit ?? null,
       visibleToCustomers: s.visible_to_customers,
       pricingRules: ((s.service_pricing_rules as {
         min_qty: number; max_qty: number | null; price_per_unit: number; label: string | null; sort_order: number

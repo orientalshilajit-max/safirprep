@@ -1,12 +1,13 @@
 "use client"
 
 import Image from "next/image"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Pencil, Download, Plus, Trash2, Box, CheckCircle, AlertCircle } from "lucide-react"
 import { Modal } from "@/components/ui/modal"
 import { StatusBadge } from "@/components/ui/status-badge"
 import { cn } from "@/lib/utils"
 import type { Invoice, InvoiceLineItem, InvoiceStatus } from "@/lib/types"
+import { listAvailableServiceTypes, type AvailableServiceType } from "@/app/service-requests/actions"
 
 const EDITABLE_STATUSES: InvoiceStatus[] = ["Unpaid", "Paid", "Overdue", "Void"]
 
@@ -33,6 +34,12 @@ function parseLineItem(item: InvoiceLineItem): { product: string; service: strin
   const m = item.description.match(/^(.+?)\s*[–—\-]\s*(.+?)(?:\s*\(\d.*\))?$/)
   if (m) return { service: m[1].trim(), product: m[2].trim() }
   return { product: item.description, service: "" }
+}
+
+function findServicePrice(service: AvailableServiceType, quantity: number): number | null {
+  const rules = [...service.pricingRules].sort((a, b) => a.minQty - b.minQty)
+  const match = rules.find((r) => r.minQty <= quantity && (r.maxQty === null || r.maxQty >= quantity))
+  return match?.pricePerUnit ?? rules[0]?.pricePerUnit ?? null
 }
 
 function escHtml(str: string) {
@@ -167,6 +174,7 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
   const [saveError,  setSaveError]  = useState("")
   const [pdfError,   setPdfError]   = useState("")
   const [pdfLoading, setPdfLoading] = useState(false)
+  const [serviceTypes, setServiceTypes] = useState<AvailableServiceType[]>([])
   const [draft, setDraft] = useState<Invoice | null>(
     () => invoice ? structuredClone(invoice) : null
   )
@@ -181,9 +189,15 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
     setPdfLoading(false)
   }
 
+  const isAdmin = role === "admin"
+
+  useEffect(() => {
+    if (!invoice || !isAdmin) return
+    listAvailableServiceTypes().then(setServiceTypes).catch(() => setServiceTypes([]))
+  }, [invoice, isAdmin])
+
   if (!invoice || !draft) return null
 
-  const isAdmin    = role === "admin"
   const isCombined = draft.status === "Combined"
   const total      = invoiceTotal(draft.lineItems)
 
@@ -200,13 +214,44 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
     setDraft((d) => d ? { ...d, lineItems: d.lineItems.map((li) => li.id === id ? { ...li, ...patch } : li) } : d)
   }
 
+  function updateItemQuantity(item: InvoiceLineItem, quantity: number) {
+    const selected = item.serviceTypeId
+      ? serviceTypes.find((s) => s.id === item.serviceTypeId)
+      : null
+    const price = selected ? findServicePrice(selected, quantity) : null
+    updateItem(item.id, {
+      quantity,
+      ...(price !== null ? { unitPrice: price } : {}),
+    })
+  }
+
+  function updateItemService(item: InvoiceLineItem, value: string) {
+    const selected = serviceTypes.find((s) => s.name === value)
+    if (!selected) {
+      updateItem(item.id, {
+        serviceName: value,
+        serviceTypeId: null,
+        serviceUnit: null,
+      })
+      return
+    }
+
+    const price = findServicePrice(selected, item.quantity)
+    updateItem(item.id, {
+      serviceName: selected.name,
+      serviceTypeId: selected.id,
+      serviceUnit: selected.unit,
+      ...(price !== null ? { unitPrice: price } : {}),
+    })
+  }
+
   function removeItem(id: string) {
     setDraft((d) => d ? { ...d, lineItems: d.lineItems.filter((li) => li.id !== id) } : d)
   }
 
   function addItem() {
     const newItem: InvoiceLineItem = {
-      id: `li${Date.now()}`, description: "", quantity: 1, unitPrice: 0, productName: "", serviceName: "",
+      id: `li${Date.now()}`, description: "", quantity: 1, unitPrice: 0, productName: "", serviceName: "", serviceTypeId: null, serviceUnit: null,
     }
     setDraft((d) => d ? { ...d, lineItems: [...d.lineItems, newItem] } : d)
   }
@@ -394,7 +439,7 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
                 <tr className="bg-gray-50 border-b border-gray-200">
                   <th className="px-4 py-2.5 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider">Product</th>
                   <th className="px-4 py-2.5 text-left text-[10px] font-bold text-gray-500 uppercase tracking-wider">Service</th>
-                  <th className="px-4 py-2.5 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider w-16">QTY</th>
+                  <th className="px-4 py-2.5 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider w-24 min-w-[96px]">QTY</th>
                   <th className="px-4 py-2.5 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider w-28">Unit Price</th>
                   <th className="px-4 py-2.5 text-right text-[10px] font-bold text-gray-500 uppercase tracking-wider w-24">Total</th>
                   {editing && <th className="w-8" />}
@@ -412,15 +457,17 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
                           className="w-full text-[13px] text-gray-800 bg-gray-50 border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 placeholder:text-gray-300" />
                       </td>
                       <td className="px-4 py-1.5">
-                        <input value={item.serviceName ?? service}
-                          onChange={(e) => updateItem(item.id, { serviceName: e.target.value })}
+                        <input
+                          list="invoice-service-types"
+                          value={item.serviceName ?? service}
+                          onChange={(e) => updateItemService(item, e.target.value)}
                           placeholder="Service name"
                           className="w-full text-[13px] text-gray-800 bg-gray-50 border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 placeholder:text-gray-300" />
                       </td>
-                      <td className="px-4 py-1.5 w-16">
+                      <td className="px-4 py-1.5 w-24 min-w-[96px]">
                         <input type="number" min={1} value={item.quantity}
-                          onChange={(e) => updateItem(item.id, { quantity: Math.max(1, Number(e.target.value)) })}
-                          className="w-full text-[13px] text-right text-gray-800 bg-gray-50 border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400" />
+                          onChange={(e) => updateItemQuantity(item, Math.max(1, Number(e.target.value)))}
+                          className="w-full min-w-[84px] text-[13px] text-right text-gray-800 bg-gray-50 border border-gray-200 rounded pl-2 pr-4 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400 tabular-nums" />
                       </td>
                       <td className="px-4 py-1.5 w-28">
                         <input type="number" min={0} step={0.01} value={item.unitPrice}
@@ -441,7 +488,7 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
                     <tr key={item.id} className="border-b border-gray-100">
                       <td className="px-4 py-2.5 text-[13px] text-gray-700">{product || <span className="text-gray-300">—</span>}</td>
                       <td className="px-4 py-2.5 text-[12px] text-gray-500">{service || <span className="text-gray-300">—</span>}</td>
-                      <td className="px-4 py-2.5 w-16 text-right text-[13px] text-gray-600 tabular-nums">{item.quantity.toLocaleString()}</td>
+                      <td className="px-4 py-2.5 w-24 min-w-[96px] text-right text-[13px] text-gray-600 tabular-nums">{item.quantity.toLocaleString()}</td>
                       <td className="px-4 py-2.5 w-28 text-right text-[13px] text-gray-600 tabular-nums">{fmt(item.unitPrice)}</td>
                       <td className="px-4 py-2.5 w-24 text-right text-[13px] font-semibold text-gray-800 tabular-nums">{fmt(lineTotal(item))}</td>
                     </tr>
@@ -449,6 +496,12 @@ export function InvoiceModal({ invoice, role, onClose, onSave, companyInfo }: In
                 })}
               </tbody>
             </table>
+
+            <datalist id="invoice-service-types">
+              {serviceTypes.map((serviceType) => (
+                <option key={serviceType.id} value={serviceType.name} />
+              ))}
+            </datalist>
 
             {editing && (
               <div className="px-4 py-2 border-t border-gray-100 bg-gray-50">

@@ -188,6 +188,7 @@ export type InvoiceLineItem = {
   productName?: string
   serviceName?: string
   serviceTypeId?: string | null
+  serviceUnit?: string | null
 }
 
 export type Invoice = {
