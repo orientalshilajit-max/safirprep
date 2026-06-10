@@ -83,7 +83,6 @@ export async function fetchSettings(): Promise<AllSettings> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || user.app_metadata?.role !== "admin") throw new Error("Admin access required.")
 
-  console.log("[settings] loading company_settings…")
   const [csRes, carRes, stRes, prRes] = await Promise.all([
     supabase.from("company_settings").select("*").order("updated_at", { ascending: false }).limit(1).maybeSingle(),
     supabase.from("carriers").select("*").order("sort_order").order("name"),
@@ -91,17 +90,10 @@ export async function fetchSettings(): Promise<AllSettings> {
     supabase.from("service_pricing_rules").select("*").order("sort_order").order("min_qty"),
   ])
 
-  if (csRes.error) {
-    console.error("[settings] company_settings error:", csRes.error.message)
-    throw new Error(csRes.error.message)
-  }
-
+  if (csRes.error) throw new Error(csRes.error.message)
   if (carRes.error) console.error("[settings] carriers error:", carRes.error)
-  else              console.log("[settings] carriers ok")
   if (stRes.error)  console.error("[settings] service_types error:", stRes.error)
-  else              console.log("[settings] service_types ok:", stRes.data?.length ?? 0, "rows")
   if (prRes.error)  console.error("[settings] service_pricing_rules error:", prRes.error)
-  else              console.log("[settings] service_pricing_rules ok:", prRes.data?.length ?? 0, "rows")
 
   let cs = csRes.data
   if (!cs) {
