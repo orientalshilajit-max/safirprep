@@ -31,8 +31,6 @@ type DbLineItem = {
   unit_price:      number | string
   product_name:    string | null
   service_name:    string | null
-  service_description: string | null
-  service_unit:    string | null
   service_type_id: string | null
 }
 
@@ -91,7 +89,7 @@ const INVOICE_SELECT = `
   id, client_id, request_id, invoice_number, status, amount, due_date, notes, created_at,
   combined_into_invoice_id,
   clients (company_name, email),
-  invoice_items (id, description, quantity, unit_price, product_name, service_name, service_description, service_unit, service_type_id),
+  invoice_items (id, description, quantity, unit_price, product_name, service_name, service_type_id),
   service_requests (request_number)
 ` as const
 
@@ -112,27 +110,6 @@ type InvoiceItemInsert = {
   description: string
   quantity:    number
   unit_price:  number
-}
-
-function invoiceItemInsert(
-  invoiceId: string,
-  li: { description: string; quantity: number; unitPrice: number; productName?: string; serviceName?: string; serviceTypeId?: string | null }
-): InvoiceItemInsert {
-  const serviceName = li.serviceName?.trim() || null
-  const description = li.productName || serviceName || li.description
-  const row: InvoiceItemInsert = {
-    invoice_id:  invoiceId,
-    description,
-    quantity:    li.quantity,
-    unit_price:  li.unitPrice,
-  }
-  const r = row as Record<string, unknown>
-  r.product_name         = li.productName ?? null
-  r.service_name         = serviceName
-  r.service_description  = serviceName ? li.description : null
-  r.service_unit         = serviceName ? "unit" : null
-  r.service_type_id      = li.serviceTypeId ?? null
-  return row
 }
 
 // ── Auth helpers ──────────────────────────────────────────────
@@ -205,7 +182,19 @@ export async function createInvoice(input: CreateInput): Promise<Invoice> {
 
   if (input.lineItems.length > 0) {
     const { error: liErr } = await supabase.from("invoice_items").insert(
-      input.lineItems.map((li) => invoiceItemInsert(inv.id, li))
+      input.lineItems.map((li) => {
+        const row: InvoiceItemInsert = {
+          invoice_id:  inv.id,
+          description: li.productName || li.description,
+          quantity:    li.quantity,
+          unit_price:  li.unitPrice,
+        }
+        const r = row as Record<string, unknown>
+        r.product_name    = li.productName    ?? null
+        r.service_name    = li.serviceName    ?? null
+        r.service_type_id = li.serviceTypeId  ?? null
+        return row
+      })
     )
     if (liErr) throw new Error(liErr.message)
   }
@@ -262,7 +251,19 @@ export async function updateInvoice(id: string, input: UpdateInput): Promise<Inv
 
   if (input.lineItems.length > 0) {
     const { error: insErr } = await supabase.from("invoice_items").insert(
-      input.lineItems.map((li) => invoiceItemInsert(id, li))
+      input.lineItems.map((li) => {
+        const row: InvoiceItemInsert = {
+          invoice_id:  id,
+          description: li.productName || li.description,
+          quantity:    li.quantity,
+          unit_price:  li.unitPrice,
+        }
+        const r = row as Record<string, unknown>
+        r.product_name    = li.productName    ?? null
+        r.service_name    = li.serviceName    ?? null
+        r.service_type_id = li.serviceTypeId  ?? null
+        return row
+      })
     )
     if (insErr) throw new Error(insErr.message)
   }
@@ -415,7 +416,19 @@ export async function combineInvoices(invoiceIds: string[]): Promise<Invoice> {
 
   if (allLineItems.length > 0) {
     const { error: liErr } = await supabase.from("invoice_items").insert(
-      allLineItems.map((li) => invoiceItemInsert(newInv.id, li))
+      allLineItems.map((li) => {
+        const row: InvoiceItemInsert = {
+          invoice_id:  newInv.id,
+          description: li.productName || li.description,
+          quantity:    li.quantity,
+          unit_price:  li.unitPrice,
+        }
+        const r = row as Record<string, unknown>
+        r.product_name    = li.productName    ?? null
+        r.service_name    = li.serviceName    ?? null
+        r.service_type_id = li.serviceTypeId  ?? null
+        return row
+      })
     )
     if (liErr) throw new Error(liErr.message)
   }

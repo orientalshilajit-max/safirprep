@@ -81,6 +81,15 @@ const AppContext = createContext<AppContextType>({
   companyPaymentInstructions: null,
 })
 
+async function loadSafely<T>(label: string, loader: () => Promise<T>): Promise<T | null> {
+  try {
+    return await loader()
+  } catch (err) {
+    console.error(`[DataSource] ${label} load failed:`, err)
+    return null
+  }
+}
+
 // ── Hooks ─────────────────────────────────────────────────────
 
 export function useRole() {
@@ -185,28 +194,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     try {
       const [productsData, shipmentsData, requestsData, filesData, invoicesData, clientsData, brandingData] =
         await Promise.all([
-          listProducts(),
-          listShipments(),
-          listRequests(),
-          listFiles(),
-          listInvoices(),
-          listClients(),
-          fetchPublicCompanyBranding(),
+          loadSafely("products", listProducts),
+          loadSafely("shipments", listShipments),
+          loadSafely("service requests", listRequests),
+          loadSafely("files", listFiles),
+          loadSafely("invoices", listInvoices),
+          loadSafely("clients", listClients),
+          loadSafely("branding", fetchPublicCompanyBranding),
         ])
-      setProducts(productsData)
-      setShipments(shipmentsData)
-      setRequests(requestsData)
-      setFiles(filesData)
-      setInvoices(invoicesData)
-      setClients(clientsData)
-      setCompanyName(brandingData.companyName)
-      setCompanyLogoUrl(brandingData.logoUrl)
-      setCompanyInvoiceLogoUrl(brandingData.invoiceLogoUrl)
-      setCompanyAddress(brandingData.address)
-      setCompanyEmail(brandingData.email)
-      setCompanyPhone(brandingData.phone)
-      setCompanyWebsite(brandingData.website)
-      setCompanyPaymentInstructions(brandingData.paymentInstructions)
+      if (productsData) setProducts(productsData)
+      if (shipmentsData) setShipments(shipmentsData)
+      if (requestsData) setRequests(requestsData)
+      if (filesData) setFiles(filesData)
+      if (invoicesData) setInvoices(invoicesData)
+      if (clientsData) setClients(clientsData)
+      if (brandingData) {
+        setCompanyName(brandingData.companyName)
+        setCompanyLogoUrl(brandingData.logoUrl)
+        setCompanyInvoiceLogoUrl(brandingData.invoiceLogoUrl)
+        setCompanyAddress(brandingData.address)
+        setCompanyEmail(brandingData.email)
+        setCompanyPhone(brandingData.phone)
+        setCompanyWebsite(brandingData.website)
+        setCompanyPaymentInstructions(brandingData.paymentInstructions)
+      }
       console.log("[DataSource] Refresh complete. Source: Supabase")
     } catch (err) {
       console.error("[DataSource] Refresh failed:", err)
@@ -246,28 +257,30 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         console.log("[DataSource] Loading all data from Supabase…")
         const [productsData, shipmentsData, requestsData, filesData, invoicesData, clientsData, brandingData] =
           await Promise.all([
-            listProducts(),
-            listShipments(),
-            listRequests(),
-            listFiles(),
-            listInvoices(),
-            listClients(),
-            fetchPublicCompanyBranding(),
+            loadSafely("products", listProducts),
+            loadSafely("shipments", listShipments),
+            loadSafely("service requests", listRequests),
+            loadSafely("files", listFiles),
+            loadSafely("invoices", listInvoices),
+            loadSafely("clients", listClients),
+            loadSafely("branding", fetchPublicCompanyBranding),
           ])
-        setProducts(productsData)
-        setShipments(shipmentsData)
-        setRequests(requestsData)
-        setFiles(filesData)
-        setInvoices(invoicesData)
-        setClients(clientsData)
-        setCompanyName(brandingData.companyName)
-        setCompanyLogoUrl(brandingData.logoUrl)
-        setCompanyInvoiceLogoUrl(brandingData.invoiceLogoUrl)
-        setCompanyAddress(brandingData.address)
-        setCompanyEmail(brandingData.email)
-        setCompanyPhone(brandingData.phone)
-        setCompanyWebsite(brandingData.website)
-        setCompanyPaymentInstructions(brandingData.paymentInstructions)
+        if (productsData) setProducts(productsData)
+        if (shipmentsData) setShipments(shipmentsData)
+        if (requestsData) setRequests(requestsData)
+        if (filesData) setFiles(filesData)
+        if (invoicesData) setInvoices(invoicesData)
+        if (clientsData) setClients(clientsData)
+        if (brandingData) {
+          setCompanyName(brandingData.companyName)
+          setCompanyLogoUrl(brandingData.logoUrl)
+          setCompanyInvoiceLogoUrl(brandingData.invoiceLogoUrl)
+          setCompanyAddress(brandingData.address)
+          setCompanyEmail(brandingData.email)
+          setCompanyPhone(brandingData.phone)
+          setCompanyWebsite(brandingData.website)
+          setCompanyPaymentInstructions(brandingData.paymentInstructions)
+        }
         authedRef.current = true
         console.log("[DataSource] Initial load complete. Source: Supabase")
       } catch (err) {
